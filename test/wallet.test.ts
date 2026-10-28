@@ -32,6 +32,32 @@ function state(wallet: Wallet): WalletState {
 }
 
 describe('Wallet', () => {
+	test('opens at the initial balance with version 1 without changing create semantics', () => {
+		for (const amount of ['0.00', '100.00', '9007199254740993.99']) {
+			const wallet = Wallet.open({
+				...props,
+				initialBalance: money(amount),
+			});
+			expect(wallet.balance.toProps().amount).toBe(amount);
+			expect(wallet.version).toBe(1);
+			expect(wallet.createdAt).toEqual(createdAt);
+			expect(wallet.updatedAt).toEqual(createdAt);
+		}
+		expect(() =>
+			Wallet.open({ ...props, initialBalance: money('1.00', 'USD') }),
+		).toThrow(InvalidWalletStateError);
+		expect(() =>
+			Wallet.open({ ...props, initialBalance: money('1.00').negate() }),
+		).toThrow(InvalidWalletStateError);
+		expect(() =>
+			Wallet.open({
+				...props,
+				initialBalance: money('1.00'),
+				id: 'invalid',
+			}),
+		).toThrow(InvalidWalletStateError);
+	});
+
 	test('creates only at zero with version 1 and preserves creation time', () => {
 		const wallet = Wallet.create(props);
 		expect(state(wallet)).toEqual({

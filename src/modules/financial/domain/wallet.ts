@@ -21,6 +21,10 @@ export interface WalletState extends CreateWalletProps {
 	readonly updatedAt: Date;
 }
 
+export interface OpenWalletProps extends CreateWalletProps {
+	readonly initialBalance: Money;
+}
+
 // PostgreSQL INTEGER is the persisted version representation, not a money limit.
 const maxVersion = 2_147_483_647;
 
@@ -48,6 +52,15 @@ export class Wallet {
 		return Wallet.rehydrate({
 			...props,
 			balance: Money.zero(props.currency),
+			version: 1,
+			updatedAt: props.createdAt,
+		});
+	}
+
+	static open(props: OpenWalletProps): Wallet {
+		return Wallet.rehydrate({
+			...props,
+			balance: props.initialBalance,
 			version: 1,
 			updatedAt: props.createdAt,
 		});
