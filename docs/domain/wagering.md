@@ -2,6 +2,8 @@
 
 Requisitos **explícitos** dos §§3, 6.0, 6.3–6.4, 7–11 e 13 de [challenge.md](../challenge.md). O original permanece primário e imutável. A [Arquitetura](../../ARCHITECTURE.md) aprova ProcessWagerUseCase como orquestrador compartilhado por HTTP/SQS; nenhuma operação está implementada.
 
+A [integração financeira](../persistence.md#integração-financeira-e-unitofwork) acrescenta somente a porta técnica `WagerTransactionRepository.insertProcessed` e seu adapter, pertencentes a Wagering. Recebem registros já processados com contexto externo real para permitir persistência atômica junto à wallet e ledger. Não há factory WagerTransaction, validação de operações, transições, replay ou ProcessWagerUseCase. OPENING continua interno a Financial, sobre armazenamento técnico compartilhado.
+
 ## Operações (§§6.3–6.4, 7, 9)
 
 | Kind     | Efeito / ledger quando aplicável              | Referência e condição explícita                                         |

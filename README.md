@@ -62,7 +62,9 @@ src/
 test/                           # integração e fronteiras
 ```
 
-Pastas vazias são preservadas por `.gitkeep`. Persistência técnica das seis tabelas e o núcleo de domínio financeiro (Money, Wallet e WalletLedgerEntry) estão implementados. APIs, invariantes e fronteira de abertura estão em [Financial](docs/domain/financial.md). Casos de uso, mappers/repositórios, apostas, processamento de mensagens e workers continuam futuros.
+Pastas vazias são preservadas por `.gitkeep`. Persistência técnica das seis tabelas, núcleo financeiro (Money, Wallet e WalletLedgerEntry), portas, mappers, adapters e UnitOfWork estão implementados. APIs, invariantes e factory de abertura versão 1 estão em [Financial](docs/domain/financial.md); contrato transacional/locks em [persistência](docs/persistence.md#integração-financeira-e-unitofwork). Casos de uso, endpoints financeiros, apostas, processamento de mensagens e workers continuam futuros.
+
+Integração dos adapters: `bun test test/financial-persistence.test.ts`. Usa outro PostgreSQL descartável e testa precisão, ledger, commit/rollback, contextos/pool e locks com três processos Bun independentes. Não substitui os cenários futuros de idempotência, SQS ou recuperação de workers.
 
 Unidade financeira sem PostgreSQL/Nest/Docker: `bun test test/money.test.ts test/wallet.test.ts test/wallet-ledger-entry.test.ts`.
 

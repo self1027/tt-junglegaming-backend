@@ -1,6 +1,6 @@
 # Distributed Wagering Processor
 
-Serviço financeiro distribuído da Jungle Gaming. Preserve correção financeira, rastreabilidade e recuperação entre instâncias. O estado atual inclui bootstrap, fundação de persistência e núcleo de domínio financeiro; componentes planejados não são funcionalidades entregues.
+Serviço financeiro distribuído da Jungle Gaming. Preserve correção financeira, rastreabilidade e recuperação entre instâncias. O estado atual inclui bootstrap, fundação de persistência, núcleo de domínio financeiro e integração transacional por portas/adapters/UnitOfWork; componentes planejados não são funcionalidades entregues.
 
 ## Fontes e contexto
 

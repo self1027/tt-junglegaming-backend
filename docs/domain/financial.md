@@ -1,6 +1,6 @@
 # Financial: contratos e invariantes
 
-Requisitos **explícitos** derivados dos §§5, 6.0–6.4, 7–9 e 13 de [challenge.md](../challenge.md), que permanece primário e imutável. Estrutura e fronteiras aprovadas estão em [ARCHITECTURE.md](../../ARCHITECTURE.md). Money, Wallet e WalletLedgerEntry estão implementados no domínio; fluxos de aplicação e persistência do domínio continuam futuros.
+Requisitos **explícitos** derivados dos §§5, 6.0–6.4, 7–9 e 13 de [challenge.md](../challenge.md), que permanece primário e imutável. Estrutura e fronteiras aprovadas estão em [ARCHITECTURE.md](../../ARCHITECTURE.md). Money, Wallet, WalletLedgerEntry e sua integração transacional PostgreSQL estão implementados; casos de uso e endpoints continuam futuros.
 
 ## Modelagem e Money (§§6.0–6.1)
 
@@ -25,7 +25,7 @@ A entrada exige exatamente duas casas, sem sinal, espaços, separadores de milha
 | Nenhum lost update                                       | Concorrência real por wallet, incluindo três ou mais instâncias (§8) |
 | version começa em 1 e incrementa somente se saldo muda   | LOSS, rejeição e replay sem mudança de versão                        |
 
-Wallet mantém identidade, playerId, currency, balance, version, createdAt e updatedAt conforme o modelo de referência. Débito/crédito devem preservar encapsulamento e correspondência com ledger. Version é sugerido para optimistic locking; a estratégia ainda está pendente. Não presumir update sem controle ou lock em memória suficiente.
+Wallet mantém identidade, playerId, currency, balance, version, createdAt e updatedAt conforme o modelo de referência. Débito/crédito preservam encapsulamento e descrevem a mudança para o ledger. A persistência usa lock pessimista por registro e comparação adicional da versão na atualização, conforme [persistência](../persistence.md#integração-financeira-e-unitofwork). A associação e gravação do ledger continuam responsabilidade do coordenador.
 
 `Wallet.create({ id, playerId, currency, createdAt })` cria exclusivamente saldo zero e versão 1. `rehydrate(WalletState)` valida estrutura, moeda/saldo, UUID interno, playerId não vazio, versão inteira positiva compatível com INTEGER SQL e datas válidas/ordenadas; preserva o estado sem aplicar crédito. Os métodos recebem `Money` não negativo e data explícita, válida e não anterior ao estado atual. Toda validação antecede mutação; overflow da versão SQL também falha sem efeitos.
 
@@ -45,9 +45,11 @@ A aplicação financeira usa a transação recebida do orquestrador; não abre c
 
 `POST /wallets` recebe playerId e initialBalance MoneyProps. Abertura é um caso de uso próprio. Saldo inicial **maior que zero** exige transação interna OPENING e lançamento CREDIT junto à wallet na mesma transação SQL. A resposta inclui id/playerId/balance/version, com version **1**, inclusive após o crédito inicial.
 
-Zero é permitido como saldo inicial: a condição de gerar OPENING é saldo positivo. Não criar lançamento fictício para abertura zero. Criação duplicada de playerId/moeda falha como conflito. OPENING não é entrada externa; o mecanismo de registro entre módulos ainda precisa ser definido sem Financial importar Wagering.
+Zero é permitido como saldo inicial: a condição de gerar OPENING é saldo positivo. Não criar lançamento fictício para abertura zero. Criação duplicada de playerId/moeda falha como conflito. OPENING não é entrada externa; a porta pública `OpeningTransactionRepository` e seu adapter Financial gravam o registro interno no armazenamento compartilhado sem importar Wagering.
 
-A factory de domínio não recebe saldo inicial nem simula OPENING. A futura aplicação deverá definir o caminho atômico de abertura positiva preservando versão 1; usar o crédito comum após `create` produziria versão 2 e não satisfaz esse contrato. `rehydrate` é reconstrução de persistido, não um atalho para abertura. Esta etapa não implementa esse fluxo.
+`Wallet.create` permanece exclusivamente a zero. A [proposta de evolução](../financial-persistence-proposal.md), registrada antes da implementação conforme §10 da tarefa de integração, adiciona `Wallet.open(OpenWalletProps)`: recebe `initialBalance: Money` junto aos campos de criação, valida as mesmas invariantes estruturais e inicia saldo/versão/datas sem aplicar crédito comum. Negativo ou moeda incompatível falham. `rehydrate` continua exclusivamente reconstruindo estado; mappers não o usam para simular abertura.
+
+A infraestrutura permite ao futuro caso de uso persistir wallet → OPENING → ledger CREDIT numa única execução de `UnitOfWork`, inclusive com saldo positivo e versão 1. A factory não persiste nada; a obrigação de registrar OPENING/ledger é do coordenador. [Testes reais](../../test/financial-persistence.test.ts) demonstram abertura positiva atômica, rollback integral e abertura zero sem registro fictício. Endpoint e caso de uso de abertura não estão implementados.
 
 ## Reconciliação (§§9, 13)
 
@@ -57,7 +59,7 @@ Divergências devem aparecer na resposta, logs e métrica; não corrigir silenci
 
 ## Pendências e limites
 
-Estratégia de locks, portas, adapters, mappers e interfaces transacionais continuam pendentes em [Arquitetura](../../ARCHITECTURE.md). A aplicação deverá associar `BalanceChange` à transação e persistir saldo/versão/ledger atomicamente; o retorno da primitiva não prova commit, unicidade, deduplicação ou concorrência. Escala fixa não define limites máximos, regras de taxas, câmbio ou arredondamento comercial. Zero por operação de aposta e eventos precisam de esclarecimento em [Wagering](wagering.md).
+Portas, adapters, mappers e UnitOfWork estão descritos em [persistência](../persistence.md#integração-financeira-e-unitofwork). A futura aplicação deverá associar `BalanceChange` à transação e persistir saldo/versão/ledger atomicamente; o retorno da primitiva não prova commit nem deduplicação. Escala fixa não define limites máximos, regras de taxas, câmbio ou arredondamento comercial. Zero por operação de aposta e eventos precisam de esclarecimento em [Wagering](wagering.md).
 
 ## API entregue e evidências (§§6.0–6.4, 13)
 
@@ -66,9 +68,9 @@ Entrada pública do módulo: [public/index.ts](../../src/modules/financial/publi
 | Componente        | API pública                                                                                                                                  |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | Money             | `create`, `rehydrate`, `zero`, `add`, `subtract`, `negate`, `equals`, `compare`, `isZero`, `isPositive`, `isNegative`, `toProps`, `currency` |
-| Wallet            | `create`, `rehydrate`, `credit`, `debit`; leitura de id/playerId/currency/balance/version/createdAt/updatedAt                                |
+| Wallet            | `create`, `open`, `rehydrate`, `credit`, `debit`; leitura de id/playerId/currency/balance/version/createdAt/updatedAt                        |
 | WalletLedgerEntry | `create`, `rehydrate`; leitura de id/walletId/transactionId/direction/amount/balanceBefore/balanceAfter/createdAt                            |
 
 Erros distinguíveis: `InvalidMoneyError`, `CurrencyMismatchError`, `InsufficientBalanceError`, `InvalidWalletStateError` e `InconsistentLedgerEntryError`, sem HTTP/failureCode. `compare` retorna -1/0/1; `equals` também rejeita moeda incompatível.
 
-Testes sem PostgreSQL/Nest/Docker: [Money](../../test/money.test.ts), [Wallet](../../test/wallet.test.ts) e [Ledger](../../test/wallet-ledger-entry.test.ts). Cobrem precisão acima de 53 bits, escala inválida sem arredondar, inversas aritméticas, falhas sem mutação, reconstrução sequencial do saldo por lançamentos, datas defensivas e imutabilidade em execução. A [compatibilidade com ExactNumericType](../../test/persistence-config.test.ts) é verificada separadamente, sem alterar o tipo técnico nem implementar mapper.
+Testes sem PostgreSQL/Nest/Docker: [Money](../../test/money.test.ts), [Wallet](../../test/wallet.test.ts) e [Ledger](../../test/wallet-ledger-entry.test.ts). Cobrem precisão acima de 53 bits, escala inválida sem arredondar, inversas aritméticas, falhas sem mutação, abertura versão 1, reconstrução sequencial do saldo por lançamentos, datas defensivas e imutabilidade em execução. A [compatibilidade com ExactNumericType](../../test/persistence-config.test.ts) é verificada separadamente; a integração e os mappers são exercitados com [PostgreSQL real](../../test/financial-persistence.test.ts).

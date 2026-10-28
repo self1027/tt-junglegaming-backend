@@ -2,7 +2,7 @@
 
 Decisão e ambiguidades: [ARCHITECTURE.md](../ARCHITECTURE.md#fundação-de-persistência--decisão-aprovada-nesta-tarefa). Requisitos: §§4–6, 7.1, 9–11 e 13 do [enunciado imutável](challenge.md), [Financial](domain/financial.md), [Wagering](domain/wagering.md) e [Messaging](domain/messaging.md).
 
-Entregue: armazenamento e integridade estrutural. Os modelos não são entidades de domínio. Não há processamento financeiro, repositórios de aplicação, UnitOfWork definitivo, consumer, publisher ou algoritmo de idempotência.
+Entregue: armazenamento, integridade estrutural e [integração financeira transacional](#integração-financeira-e-unitofwork) com portas, mappers e adapters. Os modelos não são entidades de domínio. Não há caso de uso de processamento financeiro, consumer, publisher ou algoritmo de idempotência.
 
 ## Versões e execução
 
@@ -20,7 +20,7 @@ Setup e comandos estão no [README](../README.md). `db:status` mostra migrations
 
 `money` na tabela abaixo significa **NUMERIC sem typmod**, NOT NULL, finito, não negativo e `scale(value) = 2`. O banco rejeita `1.001`, `1`, NaN e infinitos, sem arredondar; gravar `1.00`. Isso mantém escala exata sem escolher um teto comercial ausente do contrato. O limite técnico permanece o do PostgreSQL. Validação lexical da string também existe no tipo técnico ORM; Money e catálogo ISO-4217 pertencem ao [domínio Financial](domain/financial.md).
 
-Compatibilidade do núcleo financeiro: Money não negativo serializa strings canônicas aceitas por ExactNumericType; seus resultados negativos internos não são persistíveis nessas colunas. Wallet mantém UUID/texto/moeda, saldo não negativo, versão INTEGER e datas; ledger mantém UUIDs, direção e equação compatíveis. O domínio é mais restritivo que os checks SQL: rejeita moeda fora do catálogo, identidades/textos inválidos, datas inconsistentes e lançamento zero, permitido aritmeticamente pelo schema. Isso não exige alterar a migration: todo estado aceito pelo domínio cabe nas representações existentes, sujeito aos limites técnicos do PostgreSQL. Mappers e preservação atômica saldo/ledger ainda não foram implementados.
+Compatibilidade do núcleo financeiro: Money não negativo serializa strings canônicas aceitas por ExactNumericType; seus resultados negativos internos não são persistíveis nessas colunas. Wallet mantém UUID/texto/moeda, saldo não negativo, versão INTEGER e datas; ledger mantém UUIDs, direção e equação compatíveis. O domínio é mais restritivo que os checks SQL: rejeita moeda fora do catálogo, identidades/textos inválidos, datas inconsistentes e lançamento zero, permitido aritmeticamente pelo schema. Isso não exige alterar a migration: todo estado aceito pelo domínio cabe nas representações existentes, sujeito aos limites técnicos do PostgreSQL. Os mappers preservam esse estado, com evidência de atomicidade na integração abaixo.
 
 `?` indica NULL permitido; os demais campos são NOT NULL. Campos opcionais não têm defaults artificiais. `status`, `attempts` e `version` usam os defaults indicados abaixo. JSONB guarda objetos completos; dinheiro dentro de payloads/resultados deve continuar string nos futuros contratos.
 
@@ -92,9 +92,64 @@ O teste de lock mantém `PESSIMISTIC_WRITE` numa wallet e, após confirmar a aqu
 
 `bun test test/api.test.ts` usa outro container isolado e comprova inicialização Nest, HTTP liveness real e fechamento do pool. A suíte normal `bun run test` inclui esses testes e os testes negativos de arquitetura, inclusive rejeição de imports ORM em domínio/aplicação.
 
-Pendências: mapeamento do Money/rehydrate para ORM, adapters/portas de domínio (inclusive OPENING), atomicidade e versão nos casos de uso, zero por operação de aposta, transições terminais, referências já existentes mas não processadas, hash canônico/escopo de idempotência, evolução de resultados pendentes, backoff/TTL, claims/leases, publishers concorrentes e crash recovery dos futuros workers. O teste de lock não comprova concorrência financeira completa com três instâncias (§13).
+Pendências: casos de uso que coordenem os adapters, zero por operação de aposta, transições terminais, referências já existentes mas não processadas, hash canônico/escopo de idempotência, evolução de resultados pendentes, backoff/TTL, claims/leases, publishers concorrentes e crash recovery dos futuros workers. Os testes dos adapters abaixo usam três processos, mas não comprovam o processador completo (§13).
 
-## Evidências desta entrega — 2026-10-28
+## Integração financeira e UnitOfWork
+
+Implementação autorizada pela tarefa Financial Persistence Integration & Transactional UnitOfWork; atende a persistência de §§5, 6.0–6.4, 8–9 e 13 sem antecipar ProcessWagerUseCase. Sem migrations novas nem alterações nas constraints, configuração de conexão ou regras de arquitetura.
+
+| Contrato / implementação                                                                                                                   | Responsabilidade                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Financial persistence](../src/modules/financial/public/persistence.ts)                                                                    | `WalletRepository` busca por ID/player+moeda, lock, inserção e atualização; `WalletLedgerRepository` append/leitura ordenada; `OpeningTransactionRepository` registro interno de abertura; `FinancialTransactionContext` e `UnitOfWork` |
+| [Wagering persistence](../src/modules/wagering/public/persistence.ts)                                                                      | Inserção técnica mínima `insertProcessed(ProcessedWagerRecord)` e extensão do contexto; não é a entidade WagerTransaction nem seu processamento                                                                                         |
+| [Mappers](../src/modules/financial/adapters/persistence/mappers.ts)                                                                        | WalletRow ↔ Wallet, WalletLedgerEntryRow ↔ WalletLedgerEntry; NUMERIC string ↔ Money, UUIDs, versão e datas preservados, sem transições                                                                                                 |
+| [Wallet adapter](../src/modules/financial/adapters/persistence/mikro-orm-wallet.repository.ts)                                             | Lock PostgreSQL por linha, refresh após lock e atualização condicionada à versão                                                                                                                                                        |
+| [Ledger adapter](../src/modules/financial/adapters/persistence/mikro-orm-ledger.repository.ts)                                             | INSERT append-only e ordenação crescente `(created_at,id)` conforme índice existente                                                                                                                                                    |
+| [OPENING adapter](../src/modules/financial/adapters/persistence/mikro-orm-opening.repository.ts)                                           | Registro interno PROCESSED na tabela compartilhada, sem dependência Financial → Wagering                                                                                                                                                |
+| [Wagering adapter](../src/modules/wagering/adapters/persistence/mikro-orm-wager-transaction.repository.ts)                                 | INSERT do registro processado com contexto externo e referência fornecidos pelo coordenador                                                                                                                                             |
+| [UnitOfWork técnico](../src/platform/persistence/mikro-orm-unit-of-work.ts) / [sessão](../src/platform/persistence/transaction-session.ts) | Fork e transação por execução, commit/rollback, invalidação do contexto; Platform não importa módulos                                                                                                                                   |
+| [Composição](../src/bootstrap/persistence.ts)                                                                                              | Instancia os adapters com a mesma sessão; ApiModule disponibiliza `UNIT_OF_WORK`                                                                                                                                                        |
+
+`execute<T>(work: (context) => Promise<T>): Promise<T>` abre uma transação READ COMMITTED, entrega o contexto e só resolve após commit. Rejeição do callback ou erro SQL não tratado causa rollback e propaga o erro original. Colaboradores devem receber o contexto e aguardar todas as operações; uma nova chamada a `execute` é outra transação, inclusive dentro de um callback. Não compartilhar instâncias de domínio entre execuções, usar repositórios depois do callback ou capturar falha SQL para continuar uma transação abortada. Não há retries automáticos. Comportamento transacional segue a [API oficial MikroORM](https://mikro-orm.io/docs/transactions), exercitada na versão instalada.
+
+As escritas são parametrizadas pelo ORM, executadas imediatamente no EntityManager transacional. Nenhum repositório abre transação ou faz commit/flush independente. Uma falha de FK/UNIQUE/CHECK mantém código PostgreSQL reconhecível pelo chamador. O contexto mínimo não contém Inbox, Outbox ou idempotência: serão acrescentados quando seus fluxos forem implementados.
+
+Ordem de criação: **wallet → transação financeira → ledger**, por causa das FKs imediatas. Em wallet existente, adquirir lock antes de qualquer cálculo sobre saldo; atualizar wallet e inserir a transação antes de inserir o ledger. Erro posterior reverte todos os efeitos. Os testes também escrevem transação/ledger antes de uma atualização que falha, para comprovar rollback dessa ordem. UnitOfWork garante a fronteira atômica, não exige efeitos de negócio: cabe ao futuro coordenador associar cada BalanceChange ao registro e ledger corretos.
+
+`lockById` usa PESSIMISTIC_WRITE (`FOR UPDATE`), espera o detentor e mantém lock até commit/rollback. A wallet é reconstruída com refresh após aquisição, evitando identity map obsoleto. Para várias wallets, adquirir sequencialmente em **ordem crescente dos UUIDs canônicos em minúsculas**, independentemente da ordem de entrada. Não há mutex global ou lock em memória como garantia. O mapa local apenas associa a instância devolvida ao lock já obtido no banco. Ausência de registro retorna undefined; criação concorrente continua protegida pela UNIQUE de player/moeda, sem presumir lock de registro inexistente.
+
+`insert` nunca atualiza uma wallet existente. `save` exige exatamente a instância retornada pelo lock naquela execução; leituras simples e objetos de outro contexto não podem sobrescrever saldo. O UPDATE condiciona ID e versão observada sob lock, exigindo uma linha alterada: **versão é proteção adicional e rastreabilidade**, enquanto o lock serializa o cálculo financeiro. A versão vem do domínio; o ORM não a incrementa. Sem mudança, save não executa UPDATE nem altera timestamps. Isso permite leitura/replay sem efeitos; replay de wagering ainda não existe.
+
+A [proposta registrada antes da implementação](financial-persistence-proposal.md) adicionou `Wallet.open` sem alterar `create` ou `rehydrate`; detalhes pertencem a [Financial](domain/financial.md#abertura-9). Abertura positiva é testada com OPENING legítima e ledger, versão 1; abertura zero não gera registro financeiro. Não há endpoint nem caso de uso de abertura.
+
+### Evidências da integração — 2026-10-28
+
+`bun test test/financial-persistence.test.ts` usa PostgreSQL 18.3 do mesmo Compose, em projeto/volume exclusivo com teardown, sem mocks/SQLite. [Fixtures](../test/support/financial.ts) compõem primitivas e portas reais somente para testes; não implementam antecipadamente um use case de produção.
+
+- Precisão acima de 53 bits com alteração de centavos, reidratação de Money/Wallet/ledger, IDs, timestamps em milissegundos e versões; ledger ordenado também com empate de data.
+- Commit de abertura positiva; zero sem OPENING/ledger; rollback de wallet/transação após FK inválida no ledger e de toda abertura após duplicata; falha SQL injetada por trigger descartável no UPDATE reverte transação/ledger já escritos.
+- Constraints propagadas com 23503/23505/23514, callback com erro original preservado, ausência de escrita sem lock, releitura fresca sob lock, contextos independentes e uso recusado após sucesso/falha.
+- Pool limitado a duas conexões executa mais sucessos/rollbacks que a capacidade, sem esgotamento nem sessões idle in transaction; fechamento explícito em todos os caminhos.
+- [Três processos Bun](../test/support/financial-process.ts), com conexões e pools próprios, coordenados por sinais e confirmação de espera em pg_stat_activity: três créditos de 0.01 resultam em 100.03, versão 4 e quatro lançamentos contando OPENING. Sem lost updates.
+- Duas wallets confirmam operações enquanto uma terceira permanece bloqueada por outro processo. Após rollback de um detentor, dois débitos concorrentes de 80.00 sobre 100.00 produzem um sucesso, um erro de saldo insuficiente, saldo 20.00, versão 2 e um débito. Ledger reconciliado em todos esses cenários.
+- Timeout de aquisição configurado apenas no processo de teste propaga 55P03, sem retry nem efeitos financeiros. PIDs/resultados aparecem na saída; os filhos encerram o ORM e o harness verifica saída bem-sucedida.
+
+Os débitos concorrentes exercitam as primitivas financeiras e adapters; não persistem uma rejeição Wagering nem implementam replay. Não se declara aceitação distribuída completa: duplicatas idempotentes, Inbox/Outbox, SQS, crash/ACK e workers permanecem futuros. Os testes negativos de arquitetura seguem cobrindo independência do domínio/aplicação e proibição de Financial → Wagering.
+
+Validação desta integração em Windows/PowerShell, Bun 1.4.4 e Docker Engine 29.8.0, PostgreSQL 18.3:
+
+| Comando                         | Resultado                                                                                         |
+| ------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `bun run typecheck`             | Passou                                                                                            |
+| `bun run lint`                  | Passou; 34 módulos e 82 dependências, sem violações                                               |
+| `bun run format:check`          | Passou                                                                                            |
+| `bun run test`                  | **124 passaram, 0 falharam**, 841 asserções, 8 arquivos; 16 testes novos de integração financeira |
+| `bun run build`                 | Passou                                                                                            |
+| Migrations, via suíte existente | Up/status/down/up e recusa de down com ledger confirmado passaram em banco descartável            |
+
+Na execução completa, créditos na mesma wallet usaram PIDs 5332/18564/8376; wallets distintas, 2788/8544/2448; rollback seguido de disputa de saldo, 8380/8388/15356; timeout 55P03, 15220/4148. Os sinais e a consulta pg_stat_activity confirmaram a contenção antes de liberar o detentor. Ledger reconciliado após commit/rollback; pools e recursos descartáveis encerrados pelo harness. Nenhuma imagem Docker da aplicação foi reconstruída nesta integração; o build TypeScript e a inicialização Nest real passaram.
+
+## Histórico de evidências da fundação — 2026-10-28
 
 Ambiente: Windows/PowerShell com Bun 1.4.4, Docker Desktop (Engine 29.8.0), containers Linux amd64. `select version()` confirmou PostgreSQL 18.3 (Debian 18.3-1.pgdg12+1). Dependências instaladas por `bun add --exact`, com lockfile; a instalação congelada também passou nos estágios de desenvolvimento e produção do Dockerfile.
 
