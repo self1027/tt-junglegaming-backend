@@ -18,7 +18,9 @@ Setup e comandos estão no [README](../README.md). `db:status` mostra migrations
 
 `id` é UUID PK com default `gen_random_uuid()` em todas as seis tabelas. IDs de player/provider/round/game/message e chaves externas são TEXT, sem impor UUID aos identificadores externos. Todas as datas são TIMESTAMPTZ. `created_at`, `updated_at`, `received_at` e `next_attempt_at` da Outbox têm default `current_timestamp` quando presentes. `updated_at` deve ser informado pelo futuro adapter ao alterar o registro; não há hook que esconda uma decisão de aplicação.
 
-`money` na tabela abaixo significa **NUMERIC sem typmod**, NOT NULL, finito, não negativo e `scale(value) = 2`. O banco rejeita `1.001`, `1`, NaN e infinitos, sem arredondar; gravar `1.00`. Isso mantém escala exata sem escolher um teto comercial ausente do contrato. O limite técnico permanece o do PostgreSQL. Validação lexical da string também existe no tipo técnico ORM; catálogo ISO-4217 e Money do domínio continuam pendentes.
+`money` na tabela abaixo significa **NUMERIC sem typmod**, NOT NULL, finito, não negativo e `scale(value) = 2`. O banco rejeita `1.001`, `1`, NaN e infinitos, sem arredondar; gravar `1.00`. Isso mantém escala exata sem escolher um teto comercial ausente do contrato. O limite técnico permanece o do PostgreSQL. Validação lexical da string também existe no tipo técnico ORM; Money e catálogo ISO-4217 pertencem ao [domínio Financial](domain/financial.md).
+
+Compatibilidade do núcleo financeiro: Money não negativo serializa strings canônicas aceitas por ExactNumericType; seus resultados negativos internos não são persistíveis nessas colunas. Wallet mantém UUID/texto/moeda, saldo não negativo, versão INTEGER e datas; ledger mantém UUIDs, direção e equação compatíveis. O domínio é mais restritivo que os checks SQL: rejeita moeda fora do catálogo, identidades/textos inválidos, datas inconsistentes e lançamento zero, permitido aritmeticamente pelo schema. Isso não exige alterar a migration: todo estado aceito pelo domínio cabe nas representações existentes, sujeito aos limites técnicos do PostgreSQL. Mappers e preservação atômica saldo/ledger ainda não foram implementados.
 
 `?` indica NULL permitido; os demais campos são NOT NULL. Campos opcionais não têm defaults artificiais. `status`, `attempts` e `version` usam os defaults indicados abaixo. JSONB guarda objetos completos; dinheiro dentro de payloads/resultados deve continuar string nos futuros contratos.
 
@@ -90,7 +92,7 @@ O teste de lock mantém `PESSIMISTIC_WRITE` numa wallet e, após confirmar a aqu
 
 `bun test test/api.test.ts` usa outro container isolado e comprova inicialização Nest, HTTP liveness real e fechamento do pool. A suíte normal `bun run test` inclui esses testes e os testes negativos de arquitetura, inclusive rejeição de imports ORM em domínio/aplicação.
 
-Pendências: Money/rehydrate, adapters/portas de domínio (inclusive OPENING), atomicidade e versão nos casos de uso, zero por operação, transições terminais, referências já existentes mas não processadas, hash canônico/escopo de idempotência, evolução de resultados pendentes, backoff/TTL, claims/leases, publishers concorrentes e crash recovery dos futuros workers. O teste de lock não comprova concorrência financeira completa com três instâncias (§13).
+Pendências: mapeamento do Money/rehydrate para ORM, adapters/portas de domínio (inclusive OPENING), atomicidade e versão nos casos de uso, zero por operação de aposta, transições terminais, referências já existentes mas não processadas, hash canônico/escopo de idempotência, evolução de resultados pendentes, backoff/TTL, claims/leases, publishers concorrentes e crash recovery dos futuros workers. O teste de lock não comprova concorrência financeira completa com três instâncias (§13).
 
 ## Evidências desta entrega — 2026-10-28
 

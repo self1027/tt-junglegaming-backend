@@ -62,7 +62,9 @@ src/
 test/                           # integração e fronteiras
 ```
 
-Pastas vazias são preservadas por `.gitkeep`. Persistência técnica das seis tabelas está implementada; nenhum domínio financeiro, caso de uso de aposta, processamento de mensagens ou worker está entregue.
+Pastas vazias são preservadas por `.gitkeep`. Persistência técnica das seis tabelas e o núcleo de domínio financeiro (Money, Wallet e WalletLedgerEntry) estão implementados. APIs, invariantes e fronteira de abertura estão em [Financial](docs/domain/financial.md). Casos de uso, mappers/repositórios, apostas, processamento de mensagens e workers continuam futuros.
+
+Unidade financeira sem PostgreSQL/Nest/Docker: `bun test test/money.test.ts test/wallet.test.ts test/wallet-ledger-entry.test.ts`.
 
 `tsconfig.json` habilita todas as verificações strict solicitadas, incluindo índices possivelmente ausentes, propriedades opcionais exatas, overrides explícitos e verificações de código não usado. Decorators legados e `emitDecoratorMetadata` preservam a integração Nest. O build usa tsc, executado por Bun, para emitir os metadados sem depender de um bundler; Bun executa tanto os fontes em desenvolvimento quanto o JavaScript compilado. Testes e build.ts pertencem ao mesmo projeto tipado; arquivos JS de configuração são incluídos para resolução, mas recebem somente regras ESLint sem análise de tipos.
 

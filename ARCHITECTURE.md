@@ -4,7 +4,7 @@
 
 O [enunciado](docs/challenge.md) é a fonte imutável dos requisitos. O [índice de requisitos](docs/requirements.md) aponta seus contratos e critérios. Aqui ficam decisões estruturais; regras financeiras, operações e transporte ficam em [docs/domain](docs/domain/). **Aprovada** significa determinada pela tarefa de arquitetura/bootstrap; **obrigatória** vem do enunciado; **pendente/proposta** não autoriza implementação como contrato fechado.
 
-Implementado: API NestJS em [src/main.api.ts](src/main.api.ts), composição em [src/bootstrap](src/bootstrap/), `GET /health/live` e fundação PostgreSQL/MikroORM (modelos técnicos, migration e testes em [test](test/)). Não há domínio Money/wallet/apostas, repositórios de aplicação, processamento Inbox/Outbox, SQS, consumer, worker, readiness ou reconciliação. Dockerfile preservado; [compose.yaml](compose.yaml) oferece PostgreSQL.
+Implementado: API NestJS em [src/main.api.ts](src/main.api.ts), composição em [src/bootstrap](src/bootstrap/), `GET /health/live`, fundação PostgreSQL/MikroORM e núcleo de domínio [Financial](docs/domain/financial.md) (Money, Wallet e WalletLedgerEntry, com testes em [test](test/)). Não há domínio de apostas, repositórios de aplicação, processamento Inbox/Outbox, SQS, consumer, worker, readiness ou reconciliação. Dockerfile preservado; [compose.yaml](compose.yaml) oferece PostgreSQL.
 
 ## Decisões aprovadas
 
@@ -68,7 +68,6 @@ Nenhuma alternativa abaixo está aprovada. Registre decisão, justificativa, con
 
 | Tema                 | Em aberto / restrição conhecida                                                                                      |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Money interno        | Representação exata e reidratação de Money ainda pendentes; persistência string/NUMERIC definida abaixo              |
 | Locks                | Aquisição por wallet, isolamento, conflitos/deadlocks e retries; sem lock global                                     |
 | Unidade de trabalho  | Interface definitiva, contexto de repositórios e adapters, sem tipos de ORM                                          |
 | OPENING              | Registro interno na abertura sem dependência Financial → Wagering                                                    |
@@ -82,6 +81,14 @@ Nenhuma alternativa abaixo está aprovada. Registre decisão, justificativa, con
 | Autenticação         | Implementar IdP ou omitir com desenho/ponto de extensão explícito                                                    |
 
 `SELECT … FOR UPDATE` é validado como capacidade técnica nesta etapa, sem fechar a estratégia dos casos de uso. Nenhum prazo, limite comercial de dinheiro ou política financeira adicional foi definido aqui.
+
+## Núcleo financeiro — decisão autorizada pela tarefa Financial Domain Core
+
+Money usa `bigint` em unidades de 1/100: aritmética exata sem dependência externa e serialização decimal com duas casas. Criação aceita valores não negativos; reidratação também reconstrói resultados negativos internos. Moeda é validada por catálogo ISO local revisável, sem depender do locale/runtime. Contrato completo e fonte do catálogo estão em [Financial](docs/domain/financial.md).
+
+Wallet protege saldo/versão/datas em campos privados; Money, ledger e movimentação são congelados em execução. Datas entram como cópias e saem como cópias. Factories validam estado estrutural; reidratação não aplica transições. IDs internos seguem UUID do schema, playerId permanece texto e versão respeita INTEGER SQL (máximo 2147483647), sem impor teto monetário.
+
+Criação da Wallet é somente a zero; crédito/débito retornam a descrição imutável da mudança, ou `undefined` para zero sem efeitos. Ledger exige movimento positivo e valida a equação e moedas. A futura aplicação vinculará transactionId e persistirá tudo na mesma transação, com coordenação por wallet. Nenhum evento, porta, mapper, adapter ou UnitOfWork é antecipado. Abertura positiva com OPENING e versão 1 permanece pendente e não pode usar o crédito comum (que incrementa versão).
 
 ## Fundação de persistência — decisão aprovada nesta tarefa
 
