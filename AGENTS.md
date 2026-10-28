@@ -9,6 +9,7 @@ Serviço financeiro distribuído da Jungle Gaming. Preserve correção financeir
 - [Arquitetura](ARCHITECTURE.md): decisões estruturais aprovadas, componentes planejados e pendências.
 - Contratos de domínio: [Financial](docs/domain/financial.md), [Wagering](docs/domain/wagering.md), [Messaging](docs/domain/messaging.md).
 - [README](README.md) e [package.json](package.json): setup e comandos executáveis.
+- [Política de testes](test/AGENTS.md): instruções da suíte consolidada em `test/`.
 - [Graphify](docs/tooling/graphify.md): instalação, consultas e manutenção do índice derivado de código.
 - [Ponytail](docs/tooling/ponytail.md): plugin complementar de simplicidade e revisão; instalação, ativação e compatibilidade com as regras locais.
 

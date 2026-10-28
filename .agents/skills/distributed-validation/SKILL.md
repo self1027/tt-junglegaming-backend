@@ -11,7 +11,7 @@ Garantia afetada, cenário reproduzível, recursos reais disponíveis, processos
 
 ## Procedimento
 
-1. Leia [política de testes](../../../tests/AGENTS.md) e os cenários pertinentes em [requirements.md](../../../docs/requirements.md), §§8 e 13 do original. Consulte [arquitetura](../../../ARCHITECTURE.md) para localizar fronteiras de processo/commit.
+1. Leia [política de testes](../../../test/AGENTS.md) e os cenários pertinentes em [requirements.md](../../../docs/requirements.md), §§8 e 13 do original. Consulte [arquitetura](../../../ARCHITECTURE.md) para localizar fronteiras de processo/commit.
 2. Escolha somente cenários afetados. Prepare PostgreSQL e LocalStack/MiniStack reais em containers quando a garantia depender desses serviços, com dados isolados e teardown garantido.
 3. Inicie **pelo menos três processos independentes quando a garantia exigida depender dessa condição**; registre PIDs e responsabilidades. Promises, threads e mocks sequenciais não substituem múltiplas instâncias.
 4. Coordene início/falhas com barreiras e sinais observáveis; use polling limitado por prazo justificado para conclusão, sem sleep arbitrário como prova de corrida.
