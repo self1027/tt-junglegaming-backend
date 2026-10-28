@@ -6,7 +6,10 @@ import {
 	WalletLedgerEntry,
 	Money,
 } from '../src/modules/financial/public/index.js';
-import type { UnitOfWork } from '../src/modules/financial/public/index.js';
+import type {
+	FinancialTransactionContext,
+	UnitOfWork,
+} from '../src/modules/financial/public/index.js';
 import type { WageringUnitOfWork } from '../src/modules/wagering/public/persistence.js';
 import {
 	WalletRow,
@@ -23,6 +26,7 @@ import {
 	openWallet,
 	wagerRecord,
 } from './support/financial.js';
+import { financialChild } from './support/financial-child.js';
 
 let postgres: TestPostgres | undefined;
 let orm: MikroORM;
@@ -67,6 +71,27 @@ async function reconcile(
 function required<T>(value: T | undefined): T {
 	if (value === undefined) throw new Error('Missing test state');
 	return value;
+}
+
+async function waitForBlocked(pids: number[]): Promise<void> {
+	const deadline = Date.now() + 5_000;
+	while (Date.now() < deadline) {
+		const rows = await orm.em.execute<{ application_name: string }[]>(
+			"select application_name from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'",
+		);
+		if (
+			pids.every(pid =>
+				rows.some(
+					row =>
+						row.application_name ===
+						`financial-test-${String(pid)}`,
+				),
+			)
+		)
+			return;
+		await Bun.sleep(10);
+	}
+	throw new Error('Contenders did not reach PostgreSQL lock wait');
 }
 
 describe('financial persistence adapters on PostgreSQL', () => {
@@ -340,4 +365,234 @@ describe('financial persistence adapters on PostgreSQL', () => {
 			await orm.em.fork().count(WalletRow, { playerId: 'rolled-back' }),
 		).toBe(0);
 	});
+
+	test('isolates overlapping executions and rejects all repositories after their context closes', async () => {
+		const wallet = Wallet.create({
+			id: crypto.randomUUID(),
+			playerId: crypto.randomUUID(),
+			currency: 'BRL',
+			createdAt,
+		});
+		let escaped: FinancialTransactionContext | undefined;
+		await uow.execute(async outer => {
+			escaped = outer;
+			await outer.wallets.insert(wallet);
+			await uow.execute(async inner => {
+				expect(inner).not.toBe(outer);
+				expect(await inner.wallets.findById(wallet.id)).toBeUndefined();
+			});
+		});
+		const closed = required(escaped);
+		expect(closed.wallets.findById(wallet.id)).rejects.toThrow(
+			'not active',
+		);
+		expect(closed.wallets.lockById(wallet.id)).rejects.toThrow(
+			'not active',
+		);
+		expect(closed.wallets.save(wallet)).rejects.toThrow('not active');
+		expect(closed.ledger.findByWalletId(wallet.id)).rejects.toThrow(
+			'not active',
+		);
+		expect(
+			closed.openings.insert({
+				id: crypto.randomUUID(),
+				walletId: wallet.id,
+				playerId: wallet.playerId,
+				money: money('1.00'),
+				createdAt,
+			}),
+		).rejects.toThrow('not active');
+		await reconcile(wallet.id, '0.00', 1);
+	});
+
+	test('closes the failed context and keeps its writes separate from another execution', async () => {
+		const wallets = await Promise.all(
+			[0, 1].map(() => uow.execute(context => openWallet(context))),
+		);
+		let failed: FinancialTransactionContext | undefined;
+		expect(
+			uow.execute(async outer => {
+				failed = outer;
+				const wallet = required(
+					await outer.wallets.lockById(required(wallets[0]).id),
+				);
+				const change = required(
+					wallet.credit(money('1.00'), changedAt),
+				);
+				await outer.wallets.save(wallet);
+				await appendChange(outer, wallet, change);
+				await uow.execute(async inner => {
+					const other = required(
+						await inner.wallets.lockById(required(wallets[1]).id),
+					);
+					const otherChange = required(
+						other.credit(money('1.00'), changedAt),
+					);
+					await inner.wallets.save(other);
+					await appendChange(inner, other, otherChange);
+				});
+				throw new Error('outer rollback');
+			}),
+		).rejects.toThrow('outer rollback');
+		expect(
+			required(failed).wallets.findById(required(wallets[0]).id),
+		).rejects.toThrow('not active');
+		await reconcile(required(wallets[0]).id, '100.00', 1);
+		await reconcile(required(wallets[1]).id, '101.00', 2);
+	});
+
+	test('releases connections after more successes/failures than the pool capacity', async () => {
+		const isolated = await testOrm({
+			...required(postgres),
+			config: { ...required(postgres).config, pool: { min: 0, max: 2 } },
+		});
+		try {
+			const bounded = createUnitOfWork(isolated);
+			for (let index = 0; index < 8; index += 1) {
+				await bounded.execute(context =>
+					context.wallets.findById(crypto.randomUUID()),
+				);
+				expect(
+					bounded.execute(async context => {
+						await context.wallets.findById(crypto.randomUUID());
+						throw new Error('rollback');
+					}),
+				).rejects.toThrow('rollback');
+			}
+			const sessions = await isolated.em.execute<{ count: number }[]>(
+				"select count(*)::int as count from pg_stat_activity where datname = current_database() and state = 'idle in transaction'",
+			);
+			expect(sessions[0]?.count).toBe(0);
+		} finally {
+			await isolated.close(true);
+		}
+	}, 15_000);
+
+	test('serializes three independent processes on one wallet without lost cent updates', async () => {
+		const wallet = await uow.execute(context => openWallet(context));
+		const children = ['hold-credit', 'credit', 'credit'].map(mode =>
+			financialChild(required(postgres).env, wallet.id, mode),
+		);
+		try {
+			expect(new Set(children.map(child => child.pid)).size).toBe(3);
+			expect(
+				await Promise.all(children.map(child => child.next())),
+			).toEqual(['ready', 'ready', 'ready']);
+			const holder = required(children[0]);
+			await holder.signal();
+			expect(await holder.next()).toBe('locked');
+			for (const child of children.slice(1)) await child.signal();
+			await waitForBlocked(children.slice(1).map(child => child.pid));
+			await holder.signal();
+			expect(await holder.next()).toBe('committed');
+			for (const child of children.slice(1)) {
+				expect(await child.next()).toBe('locked');
+				expect(await child.next()).toBe('committed');
+			}
+			await reconcile(wallet.id, '100.03', 4);
+			expect(
+				await orm.em
+					.fork()
+					.count(WalletLedgerEntryRow, { walletId: wallet.id }),
+			).toBe(4);
+		} finally {
+			await Promise.all(children.map(child => child.close()));
+		}
+	}, 30_000);
+
+	test('allows two other wallets to commit while a third process holds a wallet lock', async () => {
+		const wallets = await Promise.all(
+			[0, 1, 2].map(() => uow.execute(context => openWallet(context))),
+		);
+		const children = wallets.map((wallet, index) =>
+			financialChild(
+				required(postgres).env,
+				wallet.id,
+				index === 0 ? 'hold-credit' : 'credit',
+			),
+		);
+		try {
+			expect(
+				await Promise.all(children.map(child => child.next())),
+			).toEqual(['ready', 'ready', 'ready']);
+			const holder = required(children[0]);
+			await holder.signal();
+			expect(await holder.next()).toBe('locked');
+			for (const child of children.slice(1)) await child.signal();
+			for (const child of children.slice(1)) {
+				expect(await child.next()).toBe('locked');
+				expect(await child.next()).toBe('committed');
+			}
+			// Independent readers still observe the holder's pre-commit state.
+			await reconcile(required(wallets[0]).id, '100.00', 1);
+			await holder.signal();
+			expect(await holder.next()).toBe('committed');
+			for (const wallet of wallets)
+				await reconcile(wallet.id, '100.01', 2);
+		} finally {
+			await Promise.all(children.map(child => child.close()));
+		}
+	}, 30_000);
+
+	test('releases locks on rollback; two independent debits cannot overspend the same balance', async () => {
+		const wallet = await uow.execute(context => openWallet(context));
+		const children = ['hold-rollback', 'debit', 'debit'].map(mode =>
+			financialChild(required(postgres).env, wallet.id, mode),
+		);
+		try {
+			expect(
+				await Promise.all(children.map(child => child.next())),
+			).toEqual(['ready', 'ready', 'ready']);
+			const holder = required(children[0]);
+			await holder.signal();
+			expect(await holder.next()).toBe('locked');
+			for (const child of children.slice(1)) await child.signal();
+			await waitForBlocked(children.slice(1).map(child => child.pid));
+			await holder.signal();
+			expect(await holder.next()).toBe('rolled-back');
+			const results: string[] = [];
+			for (const child of children.slice(1)) {
+				expect(await child.next()).toBe('locked');
+				results.push(await child.next());
+			}
+			expect(results.sort()).toEqual(['committed', 'insufficient']);
+			await reconcile(wallet.id, '20.00', 2);
+			expect(
+				await orm.em.fork().count(WalletLedgerEntryRow, {
+					walletId: wallet.id,
+					direction: 'DEBIT',
+				}),
+			).toBe(1);
+			expect(
+				await orm.em
+					.fork()
+					.count(WagerTransactionRow, { walletId: wallet.id }),
+			).toBe(2);
+		} finally {
+			await Promise.all(children.map(child => child.close()));
+		}
+	}, 30_000);
+
+	test('propagates PostgreSQL lock acquisition timeout without retry or financial effects', async () => {
+		const wallet = await uow.execute(context => openWallet(context));
+		const children = ['hold-rollback', 'timeout'].map(mode =>
+			financialChild(required(postgres).env, wallet.id, mode),
+		);
+		try {
+			expect(
+				await Promise.all(children.map(child => child.next())),
+			).toEqual(['ready', 'ready']);
+			const holder = required(children[0]);
+			const contender = required(children[1]);
+			await holder.signal();
+			expect(await holder.next()).toBe('locked');
+			await contender.signal();
+			expect(await contender.next()).toBe('55P03');
+			await holder.signal();
+			expect(await holder.next()).toBe('rolled-back');
+			await reconcile(wallet.id, '100.00', 1);
+		} finally {
+			await Promise.all(children.map(child => child.close()));
+		}
+	}, 30_000);
 });
