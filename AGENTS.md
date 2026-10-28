@@ -10,6 +10,7 @@ Serviço financeiro distribuído da Jungle Gaming. Preserve correção financeir
 - Contratos de domínio: [Financial](docs/domain/financial.md), [Wagering](docs/domain/wagering.md), [Messaging](docs/domain/messaging.md).
 - [README](README.md) e [package.json](package.json): setup e comandos executáveis.
 - [Graphify](docs/tooling/graphify.md): instalação, consultas e manutenção do índice derivado de código.
+- [Ponytail](docs/tooling/ponytail.md): plugin complementar de simplicidade e revisão; instalação, ativação e compatibilidade com as regras locais.
 
 Antes da primeira leitura/busca exploratória sobre código, consulte `bun run graph:query "pergunta/símbolos"`; use `graph:explain` ou `graph:path` para relações. Se o grafo faltar, gere com `bun run graph:build`; se arquivos indexados mudaram, execute `bun run graph:update`. Leia somente os arquivos/trechos localizados e os contratos pertinentes. Se não houver resultado útil, reformule com identificadores e use busca restrita como fallback, registrando a lacuna. Não leia o repositório ou o grafo/relatório inteiro por padrão. O índice não substitui fontes obrigatórias nem prova ausência de código.
 
