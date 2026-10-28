@@ -26,6 +26,8 @@ bun run dev
 
 Produção local: `bun run build` seguido de `bun run start`.
 
+Para navegar pelo código, consulte o grafo Graphify antes de explorar arquivos: `bun run graph:query "createApi ApiModule"`. Gere o primeiro índice com `bun run graph:build` e atualize após mudanças de código com `bun run graph:update`. Instalação da ferramenta externa, demais consultas e limites de cobertura estão em [docs/tooling/graphify.md](docs/tooling/graphify.md). O guia do agente está em [AGENTS.md](AGENTS.md).
+
 ```sh
 docker build -t distributed-wagering-processor .
 docker run --rm --name dwp -p 3000:3000 --env-file .env.example distributed-wagering-processor

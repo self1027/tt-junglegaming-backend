@@ -15,6 +15,11 @@
 		"lint": "bun --bun eslint . --max-warnings=0 && bun run architecture",
 		"lint:fix": "bun --bun eslint . --fix --max-warnings=0 && bun run architecture",
 		"architecture": "bun --bun depcruise src --config .dependency-cruiser.cjs",
+		"graph:build": "graphify update .",
+		"graph:update": "graphify update .",
+		"graph:query": "graphify query",
+		"graph:explain": "graphify explain",
+		"graph:path": "graphify path",
 		"format:check": "bun --bun prettier . --check",
 		"format": "bun --bun prettier . --write",
 		"test": "bun test"

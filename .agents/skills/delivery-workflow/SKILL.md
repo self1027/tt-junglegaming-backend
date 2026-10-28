@@ -12,7 +12,7 @@ Resultado esperado, escopo autorizado, módulos/contratos afetados e restriçõe
 ## Procedimento
 
 1. Delimite o resultado e identifique módulos/contratos afetados.
-2. Localize fontes de verdade no [AGENTS raiz](../../../AGENTS.md); consulte somente os documentos pertinentes no [índice](../../../docs/requirements.md) e na [arquitetura](../../../ARCHITECTURE.md).
+2. Localize código/relações primeiro com Graphify conforme o [AGENTS raiz](../../../AGENTS.md), depois leia os trechos encontrados. Consulte somente as fontes de verdade pertinentes no [índice](../../../docs/requirements.md) e na [arquitetura](../../../ARCHITECTURE.md).
 3. Defina aceitação verificável e um plano único de validação; complemente skills só por impacto concreto.
 4. Execute a menor mudança suficiente, mantendo decisões não aprovadas pendentes.
 5. Consolide evidências e atualize a fonte documental afetada.

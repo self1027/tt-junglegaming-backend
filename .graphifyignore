@@ -1,0 +1,10 @@
+# Exclusoes nativas do Graphify; .gitignore tambem e respeitado.
+.git/
+node_modules/
+dist/
+coverage/
+.architecture-fixtures/
+graphify-out/
+bun.lock
+.env
+.env.*
