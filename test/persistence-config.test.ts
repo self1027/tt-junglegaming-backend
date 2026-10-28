@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { persistenceConfig } from '../src/platform/persistence/config.js';
 import { ExactNumericType } from '../src/platform/persistence/exact-numeric.type.js';
+import { Money } from '../src/modules/financial/public/index.js';
 
 const env = {
 	POSTGRES_HOST: 'localhost',
@@ -25,6 +26,26 @@ test('validates environment before opening a connection', () => {
 	expect(() => persistenceConfig({ ...env, POSTGRES_POOL_MAX: '0' })).toThrow(
 		'POSTGRES_POOL_MAX',
 	);
+});
+
+test('Money serializes exactly for ExactNumericType and reconstructs without precision loss', () => {
+	const type = new ExactNumericType();
+	for (const amount of [
+		'0.00',
+		'0.01',
+		'123456789012345678901234567890.12',
+	]) {
+		const value = Money.create({ amount, currency: 'BRL' });
+		const stored = type.convertToDatabaseValue(value.toProps().amount);
+		expect(stored).toBe(amount);
+		expect(
+			Money.rehydrate({ amount: stored, currency: 'BRL' }).equals(value),
+		).toBe(true);
+	}
+	const negative = Money.create({ amount: '0.01', currency: 'BRL' }).negate();
+	expect(() =>
+		type.convertToDatabaseValue(negative.toProps().amount),
+	).toThrow('NUMERIC money');
 });
 
 test('converts exact NUMERIC strings without accepting numbers or lossy representations', () => {
