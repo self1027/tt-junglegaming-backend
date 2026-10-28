@@ -3,3 +3,5 @@ dist/
 coverage/
 bun.lock
 .architecture-fixtures/
+# Enunciado original imutavel; nao reformatar.
+docs/challenge.md
