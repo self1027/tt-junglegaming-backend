@@ -1,0 +1,40 @@
+{
+	"name": "distributed-wagering-processor",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"packageManager": "bun@1.4.4",
+	"engines": {
+		"bun": "1.4.4"
+	},
+	"scripts": {
+		"dev": "bun --watch src/main.api.ts",
+		"build": "bun build.ts",
+		"start": "bun dist/main.api.js",
+		"typecheck": "bun --bun tsc --noEmit",
+		"lint": "bun --bun eslint . --max-warnings=0 && bun run architecture",
+		"lint:fix": "bun --bun eslint . --fix --max-warnings=0 && bun run architecture",
+		"architecture": "bun --bun depcruise src --config .dependency-cruiser.cjs",
+		"format:check": "bun --bun prettier . --check",
+		"format": "bun --bun prettier . --write",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@nestjs/common": "11.2.8",
+		"@nestjs/core": "11.2.8",
+		"@nestjs/platform-express": "11.2.8",
+		"reflect-metadata": "0.2.2",
+		"rxjs": "7.8.2"
+	},
+	"devDependencies": {
+		"@eslint/js": "10.0.1",
+		"@nestjs/testing": "11.2.8",
+		"@types/bun": "1.4.4",
+		"dependency-cruiser": "18.7.0",
+		"eslint": "10.13.0",
+		"eslint-config-prettier": "10.1.8",
+		"prettier": "3.9.10",
+		"typescript": "5.9.3",
+		"typescript-eslint": "8.72.1"
+	}
+}

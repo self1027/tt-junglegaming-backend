@@ -1,0 +1,12 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"noEmit": false,
+		"allowJs": false,
+		"outDir": "dist",
+		"rootDir": "src",
+		"sourceMap": true,
+		"types": ["bun"]
+	},
+	"include": ["src/**/*.ts"]
+}
