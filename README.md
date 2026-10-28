@@ -1,40 +1,52 @@
 # Distributed Wagering Processor
 
-Bootstrap de API NestJS para um monólito modular hexagonal. Única rota: `GET /health/live`, com HTTP 200 e `{"status":"ok"}`. Liveness verifica apenas o processo HTTP.
+API NestJS para um monólito modular hexagonal, com fundação PostgreSQL/MikroORM. Única rota: `GET /health/live`, com HTTP 200 e `{"status":"ok"}`. Liveness verifica apenas o processo HTTP.
 
-Requer Bun **1.4.4** no PATH; Docker é necessário somente para containers. Node, npm, pnpm, Yarn e Nest CLI não são necessários para os comandos do projeto. Dependências diretas têm versões exatas e `bun.lock` deve ser versionado.
+Requer Bun **1.4.4** no PATH e Docker com Compose para PostgreSQL local e testes de integração. Node, npm, pnpm, Yarn e Nest CLI não são necessários para os comandos do projeto. Dependências diretas têm versões exatas e `bun.lock` deve ser versionado.
 
 ```sh
 bun install --frozen-lockfile
+# Copie .env.example para .env (PowerShell: Copy-Item .env.example .env).
+docker compose --project-name dwp up -d --wait
+bun run db:migrate
 bun run dev
 ```
 
-`PORT` é opcional (padrão `3000`, inteiro entre 1 e 65535). Bun carrega `.env` local automaticamente; `.env.example` contém somente essa variável. O servidor escuta em `0.0.0.0`.
+`PORT` é opcional (padrão `3000`, inteiro entre 1 e 65535). Bun e Compose carregam `.env` local; use [.env.example](.env.example) como referência e credenciais apenas de desenvolvimento. O servidor escuta em `0.0.0.0` e abre conexão PostgreSQL no startup. Nenhuma migration é executada automaticamente.
 
-| Comando                | Função                                                     |
-| ---------------------- | ---------------------------------------------------------- |
-| `bun run dev`          | Bun com watch sobre o TypeScript                           |
-| `bun run build`        | Limpa dist e executa tsc com Bun                           |
-| `bun run start`        | Bun executando dist/main.api.js                            |
-| `bun run typecheck`    | TypeScript sem emissão, incluindo testes e build.ts        |
-| `bun run lint`         | ESLint sem warnings e análise arquitetural                 |
-| `bun run lint:fix`     | Correções do ESLint e análise arquitetural                 |
-| `bun run architecture` | Grafo de dependências da aplicação                         |
-| `bun run format:check` | Verificação do Prettier                                    |
-| `bun run format`       | Formatação do Prettier                                     |
-| `bun run test`         | Bun Test, Nest TestingModule, HTTP real e testes negativos |
+`POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER` e `POSTGRES_PASSWORD` são obrigatórias na aplicação/CLI; `POSTGRES_POOL_MAX` é opcional (10). Compose publica a porta configurada somente em 127.0.0.1, com volume persistente e healthcheck. Não reutilize o banco da aplicação para testes: a suíte cria projetos Compose e volumes descartáveis próprios, em portas dinâmicas.
+
+| Comando                | Função                                                    |
+| ---------------------- | --------------------------------------------------------- |
+| `bun run dev`          | Bun com watch sobre o TypeScript                          |
+| `bun run build`        | Limpa dist e executa tsc com Bun                          |
+| `bun run start`        | Bun executando dist/main.api.js                           |
+| `bun run typecheck`    | TypeScript sem emissão, incluindo testes e build.ts       |
+| `bun run lint`         | ESLint sem warnings e análise arquitetural                |
+| `bun run lint:fix`     | Correções do ESLint e análise arquitetural                |
+| `bun run architecture` | Grafo de dependências da aplicação                        |
+| `bun run format:check` | Verificação do Prettier                                   |
+| `bun run format`       | Formatação do Prettier                                    |
+| `bun run test`         | Bun Test, PostgreSQL real, HTTP e testes negativos        |
+| `bun run db:migrate`   | Aplica migrations versionadas                             |
+| `bun run db:rollback`  | Reverte a última migration; recusa ledger com lançamentos |
+| `bun run db:status`    | Lista migrations executadas e pendentes                   |
 
 Produção local: `bun run build` seguido de `bun run start`.
+
+Schema físico, decisões de precisão/referências/OPENING, integridade e reversibilidade estão em [docs/persistence.md](docs/persistence.md). Testes de persistência isolados: `bun test test/persistence.test.ts`. Eles executam CLI up/status/down/up, constraints, commit/rollback, identity maps e locks por wallet entre processos Bun independentes; requerem PostgreSQL real em container e não são substituídos por mocks. A primeira execução pode baixar a imagem PostgreSQL.
+
+`docker compose --project-name dwp down` encerra o banco preservando o volume. Trocar credenciais em `.env` não altera um volume PostgreSQL já inicializado; alinhe as credenciais do banco existente. `db:rollback` é destinado ao banco descartável sem histórico, não à exclusão de lançamentos confirmados.
 
 Para navegar pelo código, consulte o grafo Graphify antes de explorar arquivos: `bun run graph:query "createApi ApiModule"`. Gere o primeiro índice com `bun run graph:build` e atualize após mudanças de código com `bun run graph:update`. Instalação da ferramenta externa, demais consultas e limites de cobertura estão em [docs/tooling/graphify.md](docs/tooling/graphify.md). O guia do agente está em [AGENTS.md](AGENTS.md).
 
 ```sh
 docker build -t distributed-wagering-processor .
-docker run --rm --name dwp -p 3000:3000 --env-file .env.example distributed-wagering-processor
+docker run --rm --name dwp-api --network dwp_default -p 3000:3000 --env-file .env -e POSTGRES_HOST=postgres -e POSTGRES_PORT=5432 distributed-wagering-processor
 curl http://localhost:3000/health/live
 ```
 
-Imagem Bun fixada por versão e digest, estágios separados para build/dependências de produção, instalação com `--frozen-lockfile`, execução como usuário `bun`. Nenhum serviço externo é necessário. Ao atualizar Bun, atualizar packageManager, engines e imagem/digest juntos.
+Imagem Bun fixada por versão e digest, estágios separados para build/dependências de produção, instalação com `--frozen-lockfile`, execução como usuário `bun`. O exemplo usa PostgreSQL iniciado no projeto Compose `dwp`; aplique migrations pelo checkout com dependências completas antes de iniciar a API. CLI não pertence à imagem de produção. Ao atualizar Bun, atualizar packageManager, engines e imagem/digest juntos.
 
 ```text
 src/
@@ -50,7 +62,7 @@ src/
 test/                           # integração e fronteiras
 ```
 
-Pastas vazias são preservadas por `.gitkeep`. Nenhum domínio financeiro, aposta, ORM, banco, mensageria ou worker foi implementado.
+Pastas vazias são preservadas por `.gitkeep`. Persistência técnica das seis tabelas está implementada; nenhum domínio financeiro, caso de uso de aposta, processamento de mensagens ou worker está entregue.
 
 `tsconfig.json` habilita todas as verificações strict solicitadas, incluindo índices possivelmente ausentes, propriedades opcionais exatas, overrides explícitos e verificações de código não usado. Decorators legados e `emitDecoratorMetadata` preservam a integração Nest. O build usa tsc, executado por Bun, para emitir os metadados sem depender de um bundler; Bun executa tanto os fontes em desenvolvimento quanto o JavaScript compilado. Testes e build.ts pertencem ao mesmo projeto tipado; arquivos JS de configuração são incluídos para resolução, mas recebem somente regras ESLint sem análise de tipos.
 

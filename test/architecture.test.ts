@@ -24,6 +24,21 @@ interface ImportCase {
 
 const cases: ImportCase[] = [
 	{
+		name: 'domain rejects ORM types',
+		from: `${financial}/domain/a.ts`,
+		to: `${financial}/domain/b.ts`,
+		specifier: '@mikro-orm/core',
+		rule: 'domain-is-pure',
+		syntax: 'type',
+	},
+	{
+		name: 'application rejects ORM',
+		from: `${wagering}/application/a.ts`,
+		to: `${wagering}/application/b.ts`,
+		specifier: '@mikro-orm/postgresql',
+		rule: 'application-no-infrastructure',
+	},
+	{
 		name: 'domain rejects Nest',
 		from: `${financial}/domain/a.ts`,
 		to: `${financial}/domain/b.ts`,

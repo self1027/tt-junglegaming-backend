@@ -1,6 +1,6 @@
 # Distributed Wagering Processor
 
-Serviço financeiro distribuído da Jungle Gaming. Preserve correção financeira, rastreabilidade e recuperação entre instâncias. O estado atual é um bootstrap; componentes planejados não são funcionalidades entregues.
+Serviço financeiro distribuído da Jungle Gaming. Preserve correção financeira, rastreabilidade e recuperação entre instâncias. O estado atual inclui bootstrap e fundação de persistência; componentes planejados não são funcionalidades entregues.
 
 ## Fontes e contexto
 
@@ -18,7 +18,7 @@ Antes de implementar: identifique o escopo pelo grafo; leia o `AGENTS.md` local;
 
 ## Stack e fronteiras
 
-NestJS, TypeScript strict, Bun 1.x (versão fixada no package.json), ESLint strict type-aware e Prettier com tabs/largura 4. PostgreSQL, SQS FIFO e Docker Compose pertencem às etapas seguintes. ORM permanece pendente entre as opções do enunciado.
+NestJS, TypeScript strict, Bun 1.x (versão fixada no package.json), ESLint strict type-aware e Prettier com tabs/largura 4. Fundação PostgreSQL/MikroORM e Compose implementada; SQS FIFO pertence às etapas seguintes. Schema e limites estão em [docs/persistence.md](docs/persistence.md).
 
 Siga as dependências de [ARCHITECTURE.md](ARCHITECTURE.md): domínio independente de frameworks, aplicação por contratos, adapters por portas, acesso entre módulos apenas por `public`, Financial independente de Wagering e composição em bootstrap. Não relaxe verificações para acomodar uma implementação. Não crie TypeScript para preencher pastas nem agentes autônomos sem necessidade.
 
@@ -41,7 +41,7 @@ Não carregue todas por padrão. A descoberta nativa usa `.agents/skills/<nome>/
 
 ## Validação e conclusão
 
-Comandos existentes: `bun run format:check`, `bun run typecheck`, `bun run lint` (já inclui `architecture`), `bun run test`, `bun run build`. `bun run dev` inicia desenvolvimento; `bun run start` executa o build. Não invente scripts de integração ou carga. Para setup, siga o README.
+Comandos existentes: `bun run format:check`, `bun run typecheck`, `bun run lint` (já inclui `architecture`), `bun run test`, `bun run build`. Persistência: `bun run db:migrate`, `bun run db:rollback`, `bun run db:status`; integração isolada: `bun test test/persistence.test.ts`. `bun run dev` inicia desenvolvimento; `bun run start` executa o build. Não invente scripts de integração ou carga. Para setup, siga o README.
 
 Documentação exige conferir links, frontmatter, rastreabilidade e coerência. Mudanças executáveis exigem os checks estáticos pertinentes, testes dos comportamentos afetados e build quando houver impacto na inicialização/compilação. Não execute testes distribuídos sem impacto em garantias distribuídas. Não repita `architecture` depois de `lint` aprovado sem motivo.
 

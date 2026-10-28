@@ -6,6 +6,6 @@ Escopo: mecanismos técnicos de persistência. Consulte a unidade de trabalho e 
 - Preserve constraints/índices, unicidade, não-negatividade, ledger imutável e segurança concorrente no PostgreSQL.
 - Migrations são versionadas/reversíveis; não use reversão para editar/apagar lançamentos financeiros confirmados. Se a reversibilidade conflitar com dados existentes, explicite a incompatibilidade e proponha alternativa.
 - Platform não importa módulos; mapeamentos que dependem do domínio pertencem aos adapters do módulo, compostos no bootstrap.
-- Use [persistence-change](../../../.agents/skills/persistence-change/SKILL.md); ainda não há ORM escolhido nem schema implementado.
+- Use [persistence-change](../../../.agents/skills/persistence-change/SKILL.md); MikroORM/PostgreSQL e schema inicial estão implementados. Confira [schema e decisões](../../../docs/persistence.md); o SQL versionado é a fonte de constraints, FKs compostas e triggers. Não gere um diff automático que remova essas garantias. UnitOfWork de aplicação e mapeamentos do domínio continuam pendentes.
 
 Exija evidências reais no PostgreSQL quando a garantia depender do banco; mocks não demonstram constraints, locks ou atomicidade.

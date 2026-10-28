@@ -10,7 +10,7 @@ Money é imutável, com valor exato e moeda ISO-4217. Cada operação retorna no
 
 O comportamento de referência cobre construção, zero por moeda, soma, subtração, negação, comparações de zero/sinal/ordem/igualdade e serialização. Aritmética entre moedas diferentes lança erro de domínio. Rejeitar NaN, Infinity, notação científica, string vazia, mais de duas casas e negativos nos contratos de entrada; representação interna pode expressar valores negativos necessários à aritmética, sem permitir saldo negativo.
 
-Domínio não importa tipos monetários do ORM nem decorators NestJS. Persistência pode separar valor/moeda se for exata e reidratada como Money. O desafio permite operar só BRL, desde que modelo permaneça multimoeda e conflitos sejam testados; adotar essa redução ainda é uma escolha, não um requisito. Biblioteca, representação interna, precisão máxima e tipo SQL não estão escolhidos. O §13 exige testes de arredondamento, mas não define modo nem autoriza arredondar entradas com escala inválida.
+Domínio não importa tipos monetários do ORM nem decorators NestJS. Persistência pode separar valor/moeda se for exata e reidratada como Money. O desafio permite operar só BRL, desde que modelo permaneça multimoeda e conflitos sejam testados; adotar essa redução ainda é uma escolha, não um requisito. Biblioteca e representação interna continuam pendentes; a [fundação de persistência](../persistence.md) usa strings/NUMERIC com escala 2, sem definir teto comercial. O §13 exige testes de arredondamento, mas não define modo nem autoriza arredondar entradas com escala inválida.
 
 ## Wallet (§6.2)
 
@@ -47,4 +47,4 @@ Divergências devem aparecer na resposta, logs e métrica; não corrigir silenci
 
 ## Pendências e limites
 
-Representação monetária, ORM, aquisição de locks e interfaces transacionais estão em [Arquitetura](../../ARCHITECTURE.md). Escala fixa não define limites máximos, regras de taxas, câmbio ou arredondamento comercial. Efeitos de operações de valor zero e sua relação com ledger/eventos precisam de esclarecimento em [Wagering](wagering.md), sem impor uma regra adicional.
+Representação monetária do domínio, estratégia de locks e interfaces transacionais continuam pendentes em [Arquitetura](../../ARCHITECTURE.md); ORM e representação persistida foram definidos na fundação. Escala fixa não define limites máximos, regras de taxas, câmbio ou arredondamento comercial. Efeitos de operações de valor zero e sua relação com ledger/eventos precisam de esclarecimento em [Wagering](wagering.md), sem impor uma regra adicional.

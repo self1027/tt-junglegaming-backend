@@ -87,4 +87,4 @@ Carga é opcional. Se implementada, expor `bun run test:load` e registrar ambien
 
 ## Divergências e definições em aberto
 
-Não há autorização para alterar o enunciado. Pontos ambíguos de operação estão em [Wagering](domain/wagering.md); escolhas estruturais em [Arquitetura](../ARCHITECTURE.md). A implementação atual cobre apenas o bootstrap. A lista de testes atuais em `test/` e a estrutura solicitada `tests/` coexistem sem migração: [tests/AGENTS.md](../tests/AGENTS.md) documenta a instrução comum.
+Não há autorização para alterar o enunciado. Pontos ambíguos de operação estão em [Wagering](domain/wagering.md); escolhas estruturais em [Arquitetura](../ARCHITECTURE.md). A implementação atual cobre bootstrap e [fundação de persistência](persistence.md), com evidências para §§4–6 (schema), 7.1 (armazenamento de referências) e 13 (migrations, constraints e transações). Isso não entrega os fluxos financeiros, idempotência, publicação ou aceitação distribuída completa. A lista de testes atuais em `test/` e a estrutura solicitada `tests/` coexistem sem migração: [tests/AGENTS.md](../tests/AGENTS.md) documenta a instrução comum.
