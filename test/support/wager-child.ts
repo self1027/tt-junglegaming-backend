@@ -4,6 +4,7 @@ export function wagerChild(
 	env: NodeJS.ProcessEnv,
 	input: ProcessWagerCommand,
 	mode = 'normal',
+	script = 'test/support/wager-process.ts',
 ): {
 	pid: number;
 	signal: () => Promise<void>;
@@ -11,15 +12,12 @@ export function wagerChild(
 	kill: () => Promise<void>;
 	close: () => Promise<void>;
 } {
-	const child = Bun.spawn(
-		[process.execPath, 'test/support/wager-process.ts', mode],
-		{
-			env: { ...env, WAGER_COMMAND: JSON.stringify(input) },
-			stdin: 'pipe',
-			stdout: 'pipe',
-			stderr: 'pipe',
-		},
-	);
+	const child = Bun.spawn([process.execPath, script, mode], {
+		env: { ...env, WAGER_COMMAND: JSON.stringify(input) },
+		stdin: 'pipe',
+		stdout: 'pipe',
+		stderr: 'pipe',
+	});
 	const reader = child.stdout.getReader();
 	const decoder = new TextDecoder();
 	const stderr = new Response(child.stderr).text();
@@ -74,6 +72,7 @@ export function wagerChild(
 				'ready',
 				'before-commit',
 				'committed-before-response',
+				'claimed',
 			].includes(message.result);
 			return message.result;
 		},
