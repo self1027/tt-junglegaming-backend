@@ -27,6 +27,40 @@ import { startPublisher } from './publisher-child.js';
 import type { PublisherChild } from './publisher-child.js';
 import type { ConsumerChild } from './consumer-child.js';
 
+export interface PublisherSqsSuite {
+	readonly postgres: TestPostgres;
+	readonly sqs: TestSqs;
+	readonly orm: MikroORM;
+	readonly children: (PublisherChild | ConsumerChild)[];
+	apiBaseUrl: () => string;
+	outputQueueUrl: () => string;
+	child: (
+		mode?: string,
+		extra?: NodeJS.ProcessEnv,
+	) => Promise<PublisherChild>;
+	until: (
+		check: () => Promise<boolean>,
+		description: string,
+		timeout?: number,
+	) => Promise<void>;
+	wallet: () => Promise<{ id: string; playerId: string }>;
+	command: (
+		w: { id: string; playerId: string },
+		kind?: WagerTransactionKind,
+		amount?: string,
+	) => ProcessWagerCommand;
+	seed: (count?: number) => Promise<void>;
+	reconcile: (id: string) => Promise<void>;
+	published: (count: number) => Promise<void>;
+	receive: (count: number) => Promise<
+		{
+			body: Record<string, unknown>;
+			group: string | undefined;
+			dedup: string | undefined;
+		}[]
+	>;
+}
+
 export let postgres: TestPostgres;
 export let sqs: TestSqs;
 export let orm: MikroORM;
