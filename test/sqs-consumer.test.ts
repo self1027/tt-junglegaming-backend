@@ -2,7 +2,11 @@ import 'reflect-metadata';
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test';
 import type { INestApplication } from '@nestjs/common';
 import type { MikroORM } from '@mikro-orm/postgresql';
-import { SendMessageCommand } from '@aws-sdk/client-sqs';
+import {
+	SendMessageCommand,
+	ReceiveMessageCommand,
+	DeleteMessageCommand,
+} from '@aws-sdk/client-sqs';
 import { createApi } from '../src/bootstrap/create-api.js';
 import { createUnitOfWork } from '../src/bootstrap/persistence.js';
 import { CreateWalletUseCase } from '../src/modules/financial/application/create-wallet.use-case.js';
@@ -435,3 +439,248 @@ test('HTTP ↔ SQS preserves historical replay and business identity', async () 
 	expect(old.body.balance).toEqual({ amount: '90.00', currency: 'BRL' });
 	await balance(wallet.id, '70.00', 2, 3, 4);
 }, 60000);
+
+test('all operations, persistent rejection and both reference-pending states receive ACK', async () => {
+	const wallet = await opened();
+	const consumer = await child();
+	const bet = input(wallet);
+	const win = input(wallet, 'WIN', '5.00');
+	const loss = input(wallet, 'LOSS', '0.00');
+	const refund = input(
+		wallet,
+		'REFUND',
+		'10.00',
+		bet.data.externalTransactionId,
+	);
+	const rollback = input(
+		wallet,
+		'ROLLBACK',
+		'5.00',
+		win.data.externalTransactionId,
+	);
+	const rejected = input(wallet, 'BET', '800.00');
+	const missing = input(wallet, 'REFUND', '1.00', 'missing');
+	const pending = input(
+		wallet,
+		'ROLLBACK',
+		'1.00',
+		missing.data.externalTransactionId,
+	);
+	const terminal = input(
+		wallet,
+		'REFUND',
+		'800.00',
+		rejected.data.externalTransactionId,
+	);
+	for (const message of [
+		bet,
+		win,
+		loss,
+		refund,
+		rollback,
+		rejected,
+		missing,
+		pending,
+		terminal,
+	]) {
+		await send(message);
+		await consumer.wait('acked', message.messageId);
+	}
+	const statuses = await orm.em.execute<{ status: string }[]>(
+		'select status from wager_transactions where wallet_id = ? and kind <> ?',
+		[wallet.id, 'OPENING'],
+	);
+	expect(statuses.map(row => row.status).sort()).toEqual(
+		[
+			'PROCESSED',
+			'PROCESSED',
+			'PROCESSED',
+			'PROCESSED',
+			'PROCESSED',
+			'REJECTED',
+			'PENDING_REFERENCE',
+			'PENDING',
+			'REJECTED',
+		].sort(),
+	);
+	await balance(wallet.id, '100.00', 9, 5, 12);
+}, 60000);
+
+test('invalid input and Inbox payload conflict reach native DLQ without financial effects', async () => {
+	const wallet = await opened();
+	const consumer = await child();
+	const original = input(wallet);
+	await send(original);
+	await consumer.wait('acked', original.messageId);
+	const conflict = {
+		...original,
+		data: { ...original.data, money: { amount: '20.00', currency: 'BRL' } },
+	};
+	const poison = { ...input(wallet), type: 'Unknown' };
+	const successor = input(wallet, 'LOSS', '0.00');
+	await send(conflict);
+	await send(poison);
+	await send(successor);
+	const bodies: string[] = [];
+	await until(async () => {
+		const result = await sqs.client.send(
+			new ReceiveMessageCommand({
+				QueueUrl: sqs.dlqUrl,
+				WaitTimeSeconds: 1,
+				MaxNumberOfMessages: 10,
+				MessageSystemAttributeNames: ['All'],
+			}),
+		);
+		for (const message of result.Messages ?? []) {
+			bodies.push(message.Body ?? '');
+			await sqs.client.send(
+				new DeleteMessageCommand({
+					QueueUrl: sqs.dlqUrl,
+					ReceiptHandle: message.ReceiptHandle,
+				}),
+			);
+		}
+		return bodies.length === 2;
+	}, 'two poison messages in DLQ');
+	expect(
+		bodies.map(body => (JSON.parse(body) as Input).messageId).sort(),
+	).toEqual([original.messageId, poison.messageId].sort());
+	await consumer.wait('acked', successor.messageId);
+	expect(
+		await orm.em.execute(
+			'select id from inbox_messages where message_id = ?',
+			[poison.messageId],
+		),
+	).toHaveLength(0);
+	await balance(wallet.id, '90.00', 2, 2, 3);
+}, 60000);
+
+test('draining consumer commits current work, ACKs it and stops before new work', async () => {
+	const wallet = await opened();
+	const message = input(wallet);
+	const first = await child('before-commit');
+	await send(message);
+	await first.wait('before-commit');
+	await first.send('stop');
+	await first.wait('stopping');
+	await first.send('release');
+	await first.wait('acked', message.messageId);
+	expect((await first.wait('closed')).connected).toBe(false);
+	await balance(wallet.id, '90.00', 1, 2, 2);
+}, 60000);
+
+test('poison redrive never consumes attempts of valid FIFO successors with four pollers', async () => {
+	const wallet = await opened();
+	const poison = { ...input(wallet), type: 'Unknown' };
+	const successors = Array.from({ length: 3 }, () => input(wallet));
+	await send(poison);
+	for (const message of successors) await send(message);
+	const consumer = await child('normal', 4);
+	for (const message of successors)
+		await consumer.wait('acked', message.messageId);
+	const dead = await sqs.client.send(
+		new ReceiveMessageCommand({
+			QueueUrl: sqs.dlqUrl,
+			WaitTimeSeconds: 1,
+			MaxNumberOfMessages: 10,
+		}),
+	);
+	expect(dead.Messages).toHaveLength(1);
+	expect(dead.Messages?.[0]?.Body).toBe(JSON.stringify(poison));
+	await sqs.client.send(
+		new DeleteMessageCommand({
+			QueueUrl: sqs.dlqUrl,
+			ReceiptHandle: dead.Messages?.[0]?.ReceiptHandle,
+		}),
+	);
+	await balance(wallet.id, '70.00', 3, 4, 6);
+}, 60000);
+
+test('real SQS redrives malformed JSON, numeric money, OPENING and malformed Unicode', async () => {
+	const wallets = await Promise.all(
+		Array.from({ length: 4 }, () => opened()),
+	);
+	const samples = wallets.map(wallet => input(wallet));
+	const a = samples[1];
+	const b = samples[2];
+	const c = samples[3];
+	if (a === undefined || b === undefined || c === undefined)
+		throw new Error('Missing invalid-message fixtures');
+	const bodies = [
+		'{',
+		JSON.stringify({
+			...a,
+			data: { ...a.data, money: { amount: 10, currency: 'BRL' } },
+		}),
+		JSON.stringify({ ...b, data: { ...b.data, kind: 'OPENING' } }),
+		JSON.stringify({ ...c, data: { ...c.data, providerId: '\ud800' } }),
+	];
+	for (let i = 0; i < bodies.length; i++) {
+		const wallet = wallets[i];
+		const body = bodies[i];
+		if (wallet === undefined || body === undefined)
+			throw new Error('Missing poison fixture');
+		await sqs.client.send(
+			new SendMessageCommand({
+				QueueUrl: sqs.queueUrl,
+				MessageBody: body,
+				MessageGroupId: wallet.id,
+				MessageDeduplicationId: crypto.randomUUID(),
+			}),
+		);
+	}
+	await child('normal', 4);
+	const dead: string[] = [];
+	await until(async () => {
+		const result = await sqs.client.send(
+			new ReceiveMessageCommand({
+				QueueUrl: sqs.dlqUrl,
+				WaitTimeSeconds: 1,
+				MaxNumberOfMessages: 10,
+			}),
+		);
+		for (const message of result.Messages ?? []) {
+			dead.push(message.Body ?? '');
+			await sqs.client.send(
+				new DeleteMessageCommand({
+					QueueUrl: sqs.dlqUrl,
+					ReceiptHandle: message.ReceiptHandle,
+				}),
+			);
+		}
+		return dead.length === 4;
+	}, 'four invalid inputs in native DLQ');
+	expect(dead.sort()).toEqual([...bodies].sort());
+	for (const wallet of wallets) await balance(wallet.id, '100.00', 0, 1, 0);
+}, 60000);
+
+test('readiness and consumers recover from real PostgreSQL and SQS outages', async () => {
+	const wallet = await opened();
+	const consumer = await child();
+	expect((await fetch(`${apiUrl}/health/ready`)).status).toBe(200);
+	await postgres.control('stop');
+	try {
+		const message = input(wallet);
+		await send(message);
+		await consumer.wait('processing_failed');
+		expect((await fetch(`${apiUrl}/health/ready`)).status).toBe(503);
+		expect((await fetch(`${apiUrl}/health/live`)).status).toBe(200);
+		await postgres.control('start');
+		await consumer.wait('acked', message.messageId);
+		await balance(wallet.id, '90.00', 1, 2, 2);
+	} finally {
+		await postgres.control('start');
+	}
+	await sqs.control('pause');
+	try {
+		expect((await fetch(`${apiUrl}/health/ready`)).status).toBe(503);
+		await consumer.wait('poll_failed');
+	} finally {
+		await sqs.control('unpause');
+	}
+	const recovered = input(wallet);
+	await send(recovered);
+	await consumer.wait('acked', recovered.messageId);
+	expect((await fetch(`${apiUrl}/health/ready`)).status).toBe(200);
+	await balance(wallet.id, '80.00', 2, 3, 4);
+}, 90000);
