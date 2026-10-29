@@ -893,3 +893,167 @@ test.each(['cross-kind', 'same-kind'] as const)(
 	},
 	20_000,
 );
+
+test('original and reversal coordinate through wallet lock without reference lock inversion', async () => {
+	const wallet = await opened();
+	const bet = input(wallet);
+	const children = [
+		child(bet, 'hold-commit'),
+		child(
+			input(wallet, {
+				kind: 'REFUND',
+				referenceExternalTransactionId: bet.externalTransactionId,
+			}),
+		),
+		child(input(wallet, { kind: 'LOSS' })),
+	];
+	try {
+		const results = await compete(children);
+		expect(results).toEqual(['PROCESSED', 'PROCESSED', 'PROCESSED']);
+		await inspect(
+			wallet,
+			'100.00',
+			3,
+			['PROCESSED', 'PROCESSED', 'PROCESSED'],
+			3,
+		);
+	} finally {
+		await close(children);
+	}
+}, 20_000);
+
+test.each(['crash-before-commit', 'crash-after-commit'] as const)(
+	'%s recovers through a new process and durable idempotency',
+	async mode => {
+		const wallet = await opened();
+		const command = input(wallet);
+		const holder = child(command, mode);
+		const others = [child(command), child(command)];
+		const children = [holder, ...others];
+		try {
+			await ready(children);
+			await holder.signal();
+			expect(await holder.next()).toBe(
+				mode === 'crash-before-commit'
+					? 'before-commit'
+					: 'committed-before-response',
+			);
+			const committedEvents = await orm.em.fork().find(OutboxMessageRow, {
+				payload: { data: { walletId: wallet.id } },
+			});
+			expect(committedEvents).toHaveLength(
+				mode === 'crash-before-commit' ? 0 : 2,
+			);
+			if (mode === 'crash-before-commit')
+				await inspect(wallet, '100.00', 1, [], 1);
+			if (mode === 'crash-before-commit') {
+				await Promise.all(others.map(c => c.signal()));
+				await blocked(others.map(c => c.pid));
+			}
+			await holder.kill();
+			if (mode === 'crash-after-commit') {
+				const reader = child(command, 'read-outbox');
+				try {
+					expect(await reader.next()).toBe('ready');
+					await reader.signal();
+					const output = await reader.next();
+					expect(output.startsWith('OUTBOX:')).toBe(true);
+					const rows: unknown = JSON.parse(
+						output.slice('OUTBOX:'.length),
+					);
+					expect(rows).toHaveLength(2);
+					expect(rows).toEqual(
+						expect.arrayContaining(
+							committedEvents.map(event => ({
+								event_id: event.eventId,
+								event_type: event.eventType,
+								event_version: 1,
+								status: 'PENDING',
+							})),
+						),
+					);
+					expect(await reader.next()).toBe('REPLAY');
+				} finally {
+					await reader.close();
+				}
+				await Promise.all(others.map(c => c.signal()));
+			}
+			const results = (
+				await Promise.all(others.map(c => c.next()))
+			).sort();
+			expect(results).toEqual(
+				mode === 'crash-before-commit'
+					? ['PROCESSED', 'REPLAY']
+					: ['REPLAY', 'REPLAY'],
+			);
+			await inspect(wallet, '90.00', 2, ['PROCESSED'], 2);
+			if (mode === 'crash-after-commit')
+				expect(
+					await orm.em.fork().find(OutboxMessageRow, {
+						payload: { data: { walletId: wallet.id } },
+					}),
+				).toEqual(committedEvents);
+			expect(await useCase.execute(command)).toMatchObject({
+				status: 'PROCESSED',
+				idempotentReplay: true,
+				balance: { amount: '90.00' },
+			});
+		} finally {
+			await close(children);
+		}
+	},
+	20_000,
+);
+
+test('fifty duplicate submissions across three Bun pools debit once', async () => {
+	const wallet = await opened();
+	const command = input(wallet);
+	const children = [
+		child(command, 'batch-17-hold'),
+		child(command, 'batch-17'),
+		child(command, 'batch-16'),
+	];
+	try {
+		const results = await compete(children);
+		expect(results).toEqual(['BATCH:1:16', 'BATCH:0:17', 'BATCH:0:16']);
+		await inspect(wallet, '90.00', 2, ['PROCESSED'], 2);
+	} finally {
+		await close(children);
+	}
+}, 20_000);
+
+test('reversal winning the wallet lock remains durably pending when the original subsequently commits', async () => {
+	const wallet = await opened();
+	const bet = input(wallet);
+	const reversal = input(wallet, {
+		kind: 'REFUND',
+		referenceExternalTransactionId: bet.externalTransactionId,
+	});
+	const children = [
+		child(reversal, 'hold-commit'),
+		child(bet),
+		child(input(wallet, { kind: 'LOSS' })),
+	];
+	try {
+		const results = await compete(children);
+		expect(results).toEqual([
+			'PENDING_REFERENCE',
+			'PROCESSED',
+			'PROCESSED',
+		]);
+		expect(await useCase.execute(reversal)).toMatchObject({
+			status: 'PENDING_REFERENCE',
+			idempotentReplay: true,
+			pendingReference: { reason: 'NOT_FOUND' },
+		});
+		await inspect(
+			wallet,
+			'90.00',
+			2,
+			['PENDING_REFERENCE', 'PROCESSED', 'PROCESSED'],
+			2,
+		);
+	} finally {
+		await close(children);
+	}
+}, 20_000);
