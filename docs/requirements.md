@@ -42,7 +42,7 @@ Todos são requisitos futuros, exceto liveness já existente. Autenticação seg
 | `GET /health/live`                                                        | Processo vivo; sem autenticação                                                                                                                                                                                                                                                                                     |
 | `GET /health/ready`                                                       | PostgreSQL e SQS alcançáveis; sem autenticação                                                                                                                                                                                                                                                                      |
 
-HTTP deve diferenciar consistentemente payload inválido, conflito de idempotência, rejeição de negócio, aceite pendente e falha transitória de infraestrutura. Nenhum código HTTP ou failureCode foi escolhido nesta etapa. UUIDs/valores dos exemplos não impõem formato geral de IDs ou limites monetários não declarados.
+HTTP deve diferenciar consistentemente payload inválido, conflito de idempotência, rejeição de negócio, aceite pendente e falha transitória de infraestrutura. Códigos HTTP permanecem futuros; failure codes de negócio estão definidos em [Wagering](domain/wagering.md). UUIDs/valores dos exemplos não impõem formato geral de IDs ou limites monetários não declarados.
 
 ## Observabilidade (§§9, 12)
 
@@ -52,7 +52,7 @@ Métricas mínimas: transações por status, duplicatas detectadas, retries, men
 
 ## Aceitação obrigatória (§§8, 13)
 
-Estas são obrigações da implementação futura, **não resultados dos testes de bootstrap**.
+Estas são obrigações do desafio, **não resultados dos testes de bootstrap**. A cobertura implementada pelas Tasks 06 e 07 e as responsabilidades futuras estão rastreadas ao final deste índice.
 
 | Grupo                 | Cenários e evidências exigidos                                                                                                                                                                          |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -87,4 +87,4 @@ Carga é opcional. Se implementada, expor `bun run test:load` e registrar ambien
 
 ## Divergências e definições em aberto
 
-Não há autorização para alterar o enunciado. Pontos ambíguos de operação estão em [Wagering](domain/wagering.md); escolhas estruturais em [Arquitetura](../ARCHITECTURE.md). A implementação atual cobre bootstrap, [fundação e integração transacional](persistence.md), [núcleo financeiro](domain/financial.md), com evidências para §§4–6 (schema e Money/Wallet/Ledger), 7.1 (armazenamento de referências), 8 (locks dos adapters com três processos), 9 (abertura atômica demonstrada sem endpoint) e 13 (unidade, migrations, constraints e transações). Isso não entrega os casos de uso financeiros, idempotência, publicação ou aceitação distribuída completa. [Testes de integração financeira](../test/financial-persistence.test.ts) comprovam precisão, atomicidade, reidratação, contextos e ausência de lost updates; a [política de testes](../test/AGENTS.md) continua em `test/`.
+Não há autorização para alterar o enunciado. A implementação atual cobre bootstrap, [persistência](persistence.md), [Financial](domain/financial.md), [Wagering](domain/wagering.md) e ProcessWagerUseCase. A [Task 06](persistence.md#task-06--processamento-atômico) acrescenta evidências para §§5–8 e 13: idempotência persistente, canonicalização/hash, replay histórico, processamento atômico, reversões, pendências e três processos Bun independentes. [Testes do processador](../test/process-wager-persistence.test.ts) cobrem 50 duplicatas, 100/80/80, wallets paralelas e recuperação antes/depois de commit. [Portas SQL](../test/wagering-persistence.test.ts) comprovam estados e migration adicional. A [Task 07](task07-outbox-report.md) acrescenta eventos tipados/versionados e Outbox atômica (§§6.5 e 11), rollback e durabilidade após crash, ampliando as mesmas evidências multi-processo (§13) sem publicar. As políticas locais aprovadas complementam o desafio sem alterá-lo. Endpoints (§9), reprocessamento agendado (§7.1), Inbox/SQS/ACK/DLQ (§10), publicação (§11) e observabilidade completa (§12) continuam futuros; não se anuncia aceitação distribuída completa do desafio. A [política de testes](../test/AGENTS.md) permanece em `test/`.

@@ -1,6 +1,6 @@
 # Financial: contratos e invariantes
 
-Requisitos **explícitos** derivados dos §§5, 6.0–6.4, 7–9 e 13 de [challenge.md](../challenge.md), que permanece primário e imutável. Estrutura e fronteiras aprovadas estão em [ARCHITECTURE.md](../../ARCHITECTURE.md). Money, Wallet, WalletLedgerEntry e sua integração transacional PostgreSQL estão implementados; casos de uso e endpoints continuam futuros.
+Requisitos **explícitos** derivados dos §§5, 6.0–6.4, 7–9 e 13 de [challenge.md](../challenge.md), que permanece primário e imutável. Estrutura e fronteiras aprovadas estão em [ARCHITECTURE.md](../../ARCHITECTURE.md). Money, Wallet, WalletLedgerEntry e sua integração transacional PostgreSQL estão implementados e participam de ProcessWagerUseCase. Casos de uso de abertura/reconciliação e endpoints continuam futuros.
 
 ## Modelagem e Money (§§6.0–6.1)
 
@@ -29,7 +29,7 @@ Wallet mantém identidade, playerId, currency, balance, version, createdAt e upd
 
 `Wallet.create({ id, playerId, currency, createdAt })` cria exclusivamente saldo zero e versão 1. `rehydrate(WalletState)` valida estrutura, moeda/saldo, UUID interno, playerId não vazio, versão inteira positiva compatível com INTEGER SQL e datas válidas/ordenadas; preserva o estado sem aplicar crédito. Os métodos recebem `Money` não negativo e data explícita, válida e não anterior ao estado atual. Toda validação antecede mutação; overflow da versão SQL também falha sem efeitos.
 
-`credit(amount, at)` e `debit(amount, at)` retornam `BalanceChange | undefined`. A mudança é imutável e contém `walletId`, `direction`, `amount`, `balanceBefore` e `balanceAfter`; não contém tipo de aposta nem requer Wagering. Valor zero retorna `undefined`, sem versão/data novas ou lançamento. Isso define somente a primitiva financeira, conforme esta tarefa; aceitação de zero por tipo de aposta permanece em aberto. Datas retornadas são cópias, e identidade/saldo/versão não têm setters públicos.
+`credit(amount, at)` e `debit(amount, at)` retornam `BalanceChange | undefined`. A mudança é imutável e contém `walletId`, `direction`, `amount`, `balanceBefore` e `balanceAfter`; não contém tipo de aposta nem requer Wagering. Valor zero retorna `undefined`, sem versão/data novas ou lançamento. Aceitação de zero por tipo de aposta pertence à política aprovada em [Wagering](wagering.md), sem alterar essa primitiva. Datas retornadas são cópias, e identidade/saldo/versão não têm setters públicos.
 
 ## Ledger e movimentações (§§5, 6.4, 7)
 
@@ -59,7 +59,7 @@ Divergências devem aparecer na resposta, logs e métrica; não corrigir silenci
 
 ## Pendências e limites
 
-Portas, adapters, mappers e UnitOfWork estão descritos em [persistência](../persistence.md#integração-financeira-e-unitofwork). A futura aplicação deverá associar `BalanceChange` à transação e persistir saldo/versão/ledger atomicamente; o retorno da primitiva não prova commit nem deduplicação. Escala fixa não define limites máximos, regras de taxas, câmbio ou arredondamento comercial. Zero por operação de aposta e eventos precisam de esclarecimento em [Wagering](wagering.md).
+Portas, adapters, mappers e UnitOfWork estão descritos em [persistência](../persistence.md#integração-financeira-e-unitofwork). ProcessWagerUseCase associa `BalanceChange` à transação e persiste saldo/versão/ledger e eventos Outbox atomicamente; o retorno isolado da primitiva não prova commit nem deduplicação. Escala fixa não define limites máximos, taxas, câmbio ou arredondamento comercial. Emissão de eventos pertence a [Messaging](messaging.md#task-07--protocolo-v1-implementado), sem dependência Financial → Wagering; políticas por operação pertencem a [Wagering](wagering.md).
 
 ## API entregue e evidências (§§6.0–6.4, 13)
 
