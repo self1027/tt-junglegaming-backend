@@ -124,6 +124,9 @@ export default tseslint.config(
 			'src/modules/wagering/adapters/sqs/**/*.ts',
 			'src/main.consumer.ts',
 			'src/bootstrap/run-consumer.ts',
+			'src/platform/messaging/outbox-publisher.ts',
+			'src/main.publisher.ts',
+			'src/bootstrap/run-publisher.ts',
 		],
 		rules: {
 			'no-restricted-syntax': [

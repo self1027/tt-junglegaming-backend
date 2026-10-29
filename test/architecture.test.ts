@@ -24,6 +24,26 @@ interface ImportCase {
 
 const cases: ImportCase[] = [
 	{
+		name: 'publisher infrastructure rejects Financial internals',
+		from: 'src/platform/messaging/outbox-publisher.ts',
+		to: `${financial}/adapters/b.ts`,
+		specifier: '../../modules/financial/adapters/b.js',
+		rule: 'platform-independent',
+	},
+	{
+		name: 'publisher SQS adapter cannot import bootstrap',
+		from: `${wagering}/adapters/sqs/a.ts`,
+		to: 'src/bootstrap/b.ts',
+		specifier: '../../../../bootstrap/b.js',
+		rule: 'bootstrap-is-composition-root',
+	},
+	{
+		name: 'only the publisher entrypoint can compose its bootstrap',
+		from: 'src/main.publisher.ts',
+		to: 'src/bootstrap/b.ts',
+		specifier: './bootstrap/b.js',
+	},
+	{
 		name: 'Wagering domain rejects AWS SDK',
 		from: `${wagering}/domain/a.ts`,
 		to: `${wagering}/domain/b.ts`,
@@ -255,6 +275,25 @@ describe('resolved architectural imports', () => {
 
 describe('ESLint architectural guards', () => {
 	const eslint = new ESLint({ cwd: root });
+
+	test('publisher loop and SQS adapter reject direct financial mutations', async () => {
+		for (const filePath of [
+			'src/platform/messaging/outbox-publisher.ts',
+			'src/modules/wagering/adapters/sqs/sqs-event-publisher.ts',
+		]) {
+			const result = await eslint.lintText(
+				'export function apply(wallet: { credit(): void }): void { wallet.credit(); }',
+				{ filePath },
+			);
+			expect(
+				result
+					.flatMap(file => file.messages)
+					.some(message =>
+						message.message.includes('Financial effects belong'),
+					),
+			).toBe(true);
+		}
+	});
 
 	test('rejects financial mutations in the consumer', async () => {
 		const result = await eslint.lintText(
