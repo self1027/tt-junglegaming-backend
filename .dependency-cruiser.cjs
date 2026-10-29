@@ -52,7 +52,7 @@ module.exports = {
 			severity: 'error',
 			from: {
 				path: '^src/',
-				pathNot: '^src/(bootstrap/|main\\.api\\.ts$)',
+				pathNot: '^src/(bootstrap/|main\\.(api|consumer)\\.ts$)',
 			},
 			to: { path: '^src/bootstrap/' },
 		},

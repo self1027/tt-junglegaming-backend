@@ -19,6 +19,7 @@ import { WalletReconciliationDiagnostics } from './reconciliation-diagnostics.js
 import { READINESS } from '../platform/observability/readiness.js';
 import { createReadiness } from './readiness.js';
 import { NoAuthGuard } from './no-auth.guard.js';
+import { SQS_TRANSPORT, optionalSqsTransport } from './sqs.js';
 
 @Module({
 	imports: [
@@ -30,7 +31,12 @@ import { NoAuthGuard } from './no-auth.guard.js';
 	controllers: [HealthController, WalletController, WagerController],
 	providers: [
 		{ provide: APP_GUARD, useClass: NoAuthGuard },
-		{ provide: READINESS, inject: [MikroORM], useFactory: createReadiness },
+		{ provide: SQS_TRANSPORT, useFactory: optionalSqsTransport },
+		{
+			provide: READINESS,
+			inject: [MikroORM, SQS_TRANSPORT],
+			useFactory: createReadiness,
+		},
 		{ provide: APP_FILTER, useClass: HttpErrorFilter },
 		WalletReconciliationDiagnostics,
 		{

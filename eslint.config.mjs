@@ -119,6 +119,45 @@ export default tseslint.config(
 		},
 	},
 	{
+		files: [
+			'src/platform/messaging/reliable-consumer.ts',
+			'src/modules/wagering/adapters/sqs/**/*.ts',
+			'src/main.consumer.ts',
+			'src/bootstrap/run-consumer.ts',
+		],
+		rules: {
+			'no-restricted-syntax': [
+				'error',
+				...importGuards,
+				compositionGuard,
+				{
+					selector:
+						'CallExpression[callee.property.name=/^(debit|credit)$/]',
+					message:
+						'Financial effects belong in the shared ProcessWagerUseCase.',
+				},
+			],
+		},
+	},
+	{
+		files: [
+			'src/modules/wagering/adapters/persistence/mikro-orm-inbox.repository.ts',
+		],
+		rules: {
+			'no-restricted-syntax': [
+				'error',
+				...importGuards,
+				compositionGuard,
+				{
+					selector:
+						'CallExpression[callee.property.name=/^(commit|transactional|begin|rollback|flush)$/]',
+					message:
+						'Inbox must use the supplied TransactionSession without its own commit.',
+				},
+			],
+		},
+	},
+	{
 		files: ['src/**/*.controller.ts'],
 		rules: {
 			'no-restricted-syntax': [

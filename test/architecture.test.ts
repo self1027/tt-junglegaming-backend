@@ -24,6 +24,41 @@ interface ImportCase {
 
 const cases: ImportCase[] = [
 	{
+		name: 'Wagering domain rejects AWS SDK',
+		from: `${wagering}/domain/a.ts`,
+		to: `${wagering}/domain/b.ts`,
+		specifier: '@aws-sdk/client-sqs',
+		rule: 'domain-is-pure',
+	},
+	{
+		name: 'Financial application rejects AWS SDK',
+		from: `${financial}/application/a.ts`,
+		to: `${financial}/application/b.ts`,
+		specifier: '@aws-sdk/client-sqs',
+		rule: 'application-no-infrastructure',
+	},
+	{
+		name: 'Wagering application rejects AWS SDK',
+		from: `${wagering}/application/a.ts`,
+		to: `${wagering}/application/b.ts`,
+		specifier: '@aws-sdk/client-sqs',
+		rule: 'application-no-infrastructure',
+	},
+	{
+		name: 'use case rejects SQS adapter',
+		from: `${wagering}/application/a.ts`,
+		to: `${wagering}/adapters/sqs/b.ts`,
+		specifier: '../adapters/sqs/b.js',
+		rule: 'application-no-infrastructure',
+	},
+	{
+		name: 'Platform rejects Wagering public',
+		from: 'src/platform/messaging/a.ts',
+		to: `${wagering}/public/b.ts`,
+		specifier: '../../modules/wagering/public/b.js',
+		rule: 'platform-independent',
+	},
+	{
 		name: 'domain rejects ORM types',
 		from: `${financial}/domain/a.ts`,
 		to: `${financial}/domain/b.ts`,
@@ -220,6 +255,45 @@ describe('resolved architectural imports', () => {
 
 describe('ESLint architectural guards', () => {
 	const eslint = new ESLint({ cwd: root });
+
+	test('rejects financial mutations in the consumer', async () => {
+		const result = await eslint.lintText(
+			'export function process(wallet: { debit(): void }): void { wallet.debit(); }',
+			{ filePath: 'src/platform/messaging/reliable-consumer.ts' },
+		);
+		expect(
+			result
+				.flatMap(file => file.messages)
+				.some(message =>
+					message.message.includes('Financial effects belong'),
+				),
+		).toBe(true);
+	});
+
+	test('rejects independent commit/transactions in the Inbox adapter', async () => {
+		for (const method of [
+			'commit',
+			'transactional',
+			'begin',
+			'rollback',
+			'flush',
+		]) {
+			const result = await eslint.lintText(
+				`export function save(em: { ${method}(): void }): void { em.${method}(); }`,
+				{
+					filePath:
+						'src/modules/wagering/adapters/persistence/mikro-orm-inbox.repository.ts',
+				},
+			);
+			expect(
+				result
+					.flatMap(file => file.messages)
+					.some(message =>
+						message.message.includes('Inbox must use the supplied'),
+					),
+			).toBe(true);
+		}
+	});
 
 	test('rejects computed import paths', async () => {
 		const result = await eslint.lintText(

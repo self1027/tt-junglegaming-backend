@@ -1,5 +1,5 @@
-import { Controller, Get, HttpCode, Inject } from '@nestjs/common';
-import { READINESS } from './readiness.js';
+import { Controller, Get, Inject, Res } from '@nestjs/common';
+import { READINESS, readinessResponse } from './readiness.js';
 import type { Readiness, ReadinessResult } from './readiness.js';
 
 @Controller('health')
@@ -12,8 +12,9 @@ export class HealthController {
 	}
 
 	@Get('ready')
-	@HttpCode(503)
-	ready(): Promise<ReadinessResult> {
-		return this.readiness.check();
+	ready(
+		@Res({ passthrough: true }) response: { status(code: number): unknown },
+	): Promise<ReadinessResult> {
+		return readinessResponse(this.readiness, response);
 	}
 }
