@@ -169,6 +169,19 @@ function command(
 	};
 }
 
+test('checks supplied wallet identity on first processing and historical replay', async () => {
+	const f = fixture();
+	const input = command({ walletId: crypto.randomUUID() });
+	expect(f.useCase.execute(input)).rejects.toThrow('WALLET_NOT_FOUND');
+	const valid = command({ walletId: f.wallet.id });
+	await f.useCase.execute(valid);
+	expect(
+		f.useCase.execute({ ...valid, walletId: crypto.randomUUID() }),
+	).rejects.toThrow('WALLET_NOT_FOUND');
+	expect((await f.useCase.execute(valid)).idempotentReplay).toBe(true);
+	expect(f.entries).toHaveLength(1);
+});
+
 test.each([
 	['BET', '90.00', 'DEBIT'],
 	['WIN', '110.00', 'CREDIT'],

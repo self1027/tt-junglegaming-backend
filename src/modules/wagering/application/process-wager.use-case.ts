@@ -39,6 +39,11 @@ export class ProcessWagerUseCase {
 					throw new WagerApplicationError('IDEMPOTENCY_CONFLICT');
 				if (claim.result === undefined)
 					throw new WagerApplicationError('IDEMPOTENCY_IN_PROGRESS');
+				if (
+					prepared.walletId !== undefined &&
+					prepared.walletId !== claim.result.walletId
+				)
+					throw new WagerApplicationError('WALLET_NOT_FOUND');
 				return { ...claim.result, idempotentReplay: true };
 			}
 			await context.transactions.lockExternalIdentity(
@@ -59,7 +64,11 @@ export class ProcessWagerUseCase {
 				prepared.playerId,
 				prepared.money.currency,
 			);
-			if (resolved === undefined)
+			if (
+				resolved === undefined ||
+				(prepared.walletId !== undefined &&
+					prepared.walletId !== resolved.id)
+			)
 				throw new WagerApplicationError('WALLET_NOT_FOUND');
 			const wallet = await context.wallets.lockById(resolved.id);
 			if (wallet === undefined)

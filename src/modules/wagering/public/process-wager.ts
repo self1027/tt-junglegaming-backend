@@ -6,6 +6,8 @@ export interface ProcessWagerCommand {
 	readonly externalTransactionId: string;
 	readonly idempotencyKey: string;
 	readonly playerId: string;
+	/** Optional for existing application callers; HTTP requires and verifies it. */
+	readonly walletId?: string | undefined;
 	readonly roundId: string;
 	readonly gameId: string;
 	readonly kind: WagerTransactionKind;
@@ -49,6 +51,7 @@ export type WagerApplicationErrorCode =
 	| 'IDEMPOTENCY_CONFLICT'
 	| 'EXTERNAL_TRANSACTION_CONFLICT'
 	| 'IDEMPOTENCY_IN_PROGRESS'
+	| 'TRANSACTION_NOT_FOUND'
 	| 'WALLET_NOT_FOUND';
 
 export class WagerApplicationError extends Error {
