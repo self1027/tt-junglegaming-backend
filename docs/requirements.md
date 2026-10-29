@@ -89,7 +89,21 @@ Carga é opcional. Se implementada, expor `bun run test:load` e registrar ambien
 
 ## Divergências e definições em aberto
 
-Não há autorização para alterar o enunciado. A implementação atual cobre bootstrap, [persistência](persistence.md), [Financial](domain/financial.md), [Wagering](domain/wagering.md) e ProcessWagerUseCase. A [Task 06](persistence.md#task-06--processamento-atômico) acrescenta evidências para §§5–8 e 13: idempotência persistente, canonicalização/hash, replay histórico, processamento atômico, reversões, pendências e três processos Bun independentes. [Testes do processador](../test/process-wager-persistence.test.ts) cobrem 50 duplicatas, 100/80/80, wallets paralelas e recuperação antes/depois de commit. [Portas SQL](../test/wagering-persistence.test.ts) comprovam estados e migration adicional. A [Task 07](task07-outbox-report.md) acrescenta eventos tipados/versionados e Outbox atômica (§§6.5 e 11), rollback e durabilidade após crash, ampliando as mesmas evidências multi-processo (§13) sem publicar. As políticas locais aprovadas complementam o desafio sem alterá-lo. A Task 08 entrega endpoints (§9), abertura, consultas e reconciliação com snapshot e concorrência HTTP real; readiness completo depende de SQS. A Task 09 entrega Inbox/SQS/ACK/DLQ (§10), atomicidade (§6.5), concorrência/recuperação (§§8, 13) e readiness PostgreSQL/SQS (§9), com [operação](sqs-consumer.md) e [evidências](task09-sqs-report.md). Publicação (§11) está entregue na Task 10; reprocessamento agendado (§7.1) e observabilidade completa (§12) continuam futuros; não se anuncia aceitação distribuída completa do desafio. A [política de testes](../test/AGENTS.md) permanece em `test/`.
+Não há autorização para alterar o enunciado. A implementação atual cobre bootstrap, [persistência](persistence.md), [Financial](domain/financial.md), [Wagering](domain/wagering.md) e ProcessWagerUseCase. A [Task 06](persistence.md#task-06--processamento-atômico) acrescenta evidências para §§5–8 e 13: idempotência persistente, canonicalização/hash, replay histórico, processamento atômico, reversões, pendências e três processos Bun independentes. [Testes do processador](../test/process-wager-persistence.test.ts) cobrem 50 duplicatas, 100/80/80, wallets paralelas e recuperação antes/depois de commit. [Portas SQL](../test/wagering-persistence.test.ts) comprovam estados e migration adicional. A [Task 07](task07-outbox-report.md) acrescenta eventos tipados/versionados e Outbox atômica (§§6.5 e 11), rollback e durabilidade após crash, ampliando as mesmas evidências multi-processo (§13) sem publicar. As políticas locais aprovadas complementam o desafio sem alterá-lo. A Task 08 entrega endpoints (§9), abertura, consultas e reconciliação com snapshot e concorrência HTTP real; readiness completo depende de SQS. A Task 09 entrega Inbox/SQS/ACK/DLQ (§10), atomicidade (§6.5), concorrência/recuperação (§§8, 13) e readiness PostgreSQL/SQS (§9), com [operação](sqs-consumer.md) e [evidências](task09-sqs-report.md). Publicação (§11) está entregue na Task 10; reprocessamento agendado (§7.1) está entregue na Task 11; observabilidade completa (§12) continua futura; não se anuncia aceitação distribuída completa do desafio. A [política de testes](../test/AGENTS.md) permanece em `test/`.
+
+## Task 11 — recuperação de referências (§§5–8, 11, 13)
+
+[Contrato principal](domain/wagering.md#task-11--resolução-de-referências),
+[operação](pending-reference-worker.md) e [relatório](task11-pending-report.md).
+
+| Critério                                                          | Evidência executável                                                                                         |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| PENDING_REFERENCE/PENDING, referência atual, TTL/backoff          | [Unidade](../test/pending-worker.test.ts) e [PostgreSQL](../test/pending-persistence.test.ts)                |
+| Claims, SKIP LOCKED, índice, leases/fencing, migration reversível | PostgreSQL real, EXPLAIN, up/status/down/up e estados legados                                                |
+| Mesma identidade/motor, snapshot terminal, eventos atômicos       | Rollback em wallet/ledger/Wager/idempotência/dois eventos/finalização, histórico e precisão acima de 53 bits |
+| Três processos, crashes, reversões, wallets independentes         | [Distribuídos](../test/pending-distributed.test.ts), barreiras stdin/pg_stat_activity, reconciliação         |
+| Replay HTTP/SQS durante resolução e saída FIFO                    | [Pipeline real](../test/pending-pipeline.test.ts), consumer/Inbox/worker/publisher                           |
+| Processo independente, timeout, SIGTERM/deadline e recuperação    | [Docker real](../test/pending-docker.test.ts), PostgreSQL pausado e sucessor                                 |
 
 ## Task 10 — cobertura de publicação (§§3, 5, 6.5, 8, 11–13)
 
@@ -109,6 +123,5 @@ recuperáveis, fencing e retry sem descarte fecham o caminho Outbox → SQS FIFO
 | Ordenação e deduplicação declaradas                                    | Grupo walletId e dedup eventId verificados no broker; sem promessa de ordem de commit ou exactly-once                              |
 | Arquitetura preservada                                                 | [Testes negativos](../test/architecture.test.ts), lint/Dependency Cruiser, sem AWS em domínio ou Platform → módulos                |
 
-Worker de referências, processamento posterior de PENDING_REFERENCE/TTL e métricas
-agregadas continuam pendentes. Histórico de Tasks anteriores registra a cobertura
+Worker de referências, processamento posterior de PENDING_REFERENCE/PENDING e TTL estão entregues na Task 11 acima. Métricas agregadas continuam pendentes. Histórico de Tasks anteriores registra a cobertura
 na data de cada entrega e não substitui a implementação/evidência atual.

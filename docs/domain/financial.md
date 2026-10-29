@@ -63,6 +63,13 @@ QueryWalletUseCase retorna DTO de wallet e ledger paginado por `(created_at,id)`
 
 ## Pendências e limites
 
+Na Task 11, ResolvePendingWagerUseCase reutiliza as mesmas regras de aplicação,
+Wallet e associação BalanceChange/ledger do ProcessWagerUseCase. Atualiza a
+WagerTransaction existente no mesmo commit de saldo/versão/ledger/idempotência e
+novos fatos Outbox. Nenhuma dependência Financial → Wagering ou nova primitiva
+monetária foi introduzida. [Contrato de resolução](wagering.md#task-11--resolução-de-referências)
+e [reconciliações reais](../task11-pending-report.md).
+
 Portas, adapters, mappers e UnitOfWork estão descritos em [persistência](../persistence.md#integração-financeira-e-unitofwork). ProcessWagerUseCase associa `BalanceChange` à transação e persiste saldo/versão/ledger e eventos Outbox atomicamente; o retorno isolado da primitiva não prova commit nem deduplicação. Escala fixa não define limites máximos, taxas, câmbio ou arredondamento comercial. Emissão de eventos pertence a [Messaging](messaging.md#task-07--protocolo-v1-implementado), sem dependência Financial → Wagering; políticas por operação pertencem a [Wagering](wagering.md).
 
 ## API entregue e evidências (§§6.0–6.4, 13)

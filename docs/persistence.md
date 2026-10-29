@@ -2,7 +2,7 @@
 
 Decisão e ambiguidades: [ARCHITECTURE.md](../ARCHITECTURE.md#fundação-de-persistência--decisão-aprovada-nesta-tarefa). Requisitos: §§4–6, 7.1, 9–11 e 13 do [enunciado imutável](challenge.md), [Financial](domain/financial.md), [Wagering](domain/wagering.md) e [Messaging](domain/messaging.md).
 
-Entregue: armazenamento, integridade estrutural, [integração financeira transacional](#integração-financeira-e-unitofwork), [processamento atômico da Task 06](#task-06--processamento-atômico) e [inserção Outbox da Task 07](#task-07--outbox-transacional). Os modelos não são entidades de domínio. A Task 09 acrescenta consumer e Inbox transacional; publisher recuperável está entregue na Task 10; worker de referências permanece futuro.
+Entregue: armazenamento, integridade estrutural, [integração financeira transacional](#integração-financeira-e-unitofwork), [processamento atômico da Task 06](#task-06--processamento-atômico) e [inserção Outbox da Task 07](#task-07--outbox-transacional). Os modelos não são entidades de domínio. A Task 09 acrescenta consumer e Inbox transacional; publisher recuperável está entregue na Task 10; worker de referências está implementado na Task 11.
 
 ## Versões e execução
 
@@ -73,7 +73,7 @@ As PKs e constraints UNIQUE acima criam índices B-tree. Índices adicionais:
 | `outbox_pending_due_idx`                 | `(next_attempt_at,created_at,id) WHERE status = 'PENDING'`                                            |
 | `idempotency_transaction_idx`            | `(transaction_id)`                                                                                    |
 
-A unicidade de reversão protege sucesso por tipo e, desde a Task 06, impede modalidades diretas cumulativas sobre a mesma referência. Tentativas rejeitadas continuam auditáveis. Agendamento de next_attempt_at, leases e limites de tentativas pertencem ao worker futuro.
+A unicidade de reversão protege sucesso por tipo e, desde a Task 06, impede modalidades diretas cumulativas sobre a mesma referência. Tentativas rejeitadas continuam auditáveis. Agendamento, leases e TTL de referências estão entregues na Task 11 abaixo.
 
 ## Migration e reversão
 
@@ -93,7 +93,40 @@ O teste de lock mantém `PESSIMISTIC_WRITE` numa wallet e, após confirmar a aqu
 
 `bun test test/api.test.ts` usa outro container isolado e comprova inicialização Nest, HTTP liveness real e fechamento do pool. A suíte normal `bun run test` inclui esses testes e os testes negativos de arquitetura, inclusive rejeição de imports ORM em domínio/aplicação.
 
-Pendências atuais: backoff/TTL, claims de referências e atualização condicionada de resultados pendentes pelo worker. Publicação concorrente e recuperação estão entregues na Task 10. Inbox e crash/ACK estão cobertos na Task 09. As evidências históricas dos adapters abaixo não substituem as do processador completo nas Tasks 06 e 07.
+Backoff/TTL, claims de referências e atualização condicionada de resultados pendentes estão entregues na Task 11 abaixo. Publicação concorrente e recuperação estão entregues na Task 10. Inbox e crash/ACK estão cobertos na Task 09. As evidências históricas dos adapters abaixo não substituem as do processador completo nas Tasks 06 e 07.
+
+## Task 11 — claims de referências
+
+[Migration202610290002](../src/platform/persistence/migrations/Migration202610290002.ts)
+adiciona claim_token UUID, claimed_by texto e claimed_until timestamptz a
+wager_transactions. CHECK exige trio nulo ou completo, owner não vazio, lease
+finito e estado PENDING/PENDING_REFERENCE. Dados legados permanecem válidos.
+Novo wager_pending_due_idx cobre `(coalesce(next_attempt_at,created_at),created_at,id)`
+para não terminais com referência externa e kind diferente de OPENING. O índice
+anterior e todas as constraints de integridade/reversão permanecem.
+
+O [store do módulo](../src/modules/wagering/adapters/persistence/mikro-orm-pending.repository.ts)
+confirma SELECT FOR UPDATE SKIP LOCKED/UPDATE de aquisição em transação curta;
+attempts/last_attempt_at contam claims confirmados no relógio SQL. NULL de
+agendamento legado usa criação. Não reutiliza campos/claims da Outbox.
+O repositório de resolução usa exclusivamente TransactionSession da UnitOfWork;
+seu lock da linha vem **depois** da wallet. Finalização condicional verifica token,
+estado esperado não terminal e lease válido; estado/referência/failureCode/data,
+scheduling e limpeza do claim são um UPDATE. Zero linhas lança erro e reverte
+saldo/ledger/idempotência/Outbox da mesma execução.
+
+IdempotencyRepository.lockResult bloqueia apenas registro COMPLETED existente,
+com scope/key/hash/transaction_id. resolvePending confere também identidades
+do JSON e status anterior não terminal antes de escrever snapshot terminal;
+não altera hash/identidade e não sobrescreve resultado terminal.
+[Contrato e replay](domain/wagering.md#task-11--resolução-de-referências).
+
+Retry técnico é UPDATE isolado apenas após rollback/retorno da UnitOfWork,
+condicionado ao token/lease/não terminal; falha deixa claim expirar. Down remove
+trio/CHECK/índice novo sem apagar operações, ledger ou scheduling; parar workers
+antes de perder reservas. Testes reais exercitam up/status/down/up com estados
+legados, EXPLAIN indexado, SKIP LOCKED, leases, fencing e rollback integral.
+[Evidências](task11-pending-report.md).
 
 ## Task 10 — aquisição e confirmação da Outbox
 

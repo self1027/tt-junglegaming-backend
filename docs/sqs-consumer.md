@@ -2,7 +2,7 @@
 
 Contratos/identidades/atomicidade: [Messaging](domain/messaging.md#task-09--protocolo-de-recepção-implementado).
 Semântica financeira/replay: [Wagering](domain/wagering.md). Resultados executados:
-[relatório Task 09](task09-sqs-report.md). A [Task 10](outbox-publisher.md) acrescenta publisher de saída independente; worker de referências permanece futuro.
+[relatório Task 09](task09-sqs-report.md). A [Task 10](outbox-publisher.md) acrescenta publisher de saída independente; worker de referências está implementado na [Task 11](pending-reference-worker.md).
 
 ## Ambiente local
 

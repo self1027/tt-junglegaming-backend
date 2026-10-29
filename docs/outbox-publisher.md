@@ -192,5 +192,4 @@ Docker cobre imagem compilada e SIGTERM real, drenagem e prazo excedido.
 Resultados executados, incluindo limitações, pertencem ao relatório da tarefa.
 
 Não há consumidor downstream, teste contra IAM/AWS gerenciada, teste de carga ou
-garantia de retenção infinita no broker. A próxima tarefa é o Pending Reference
-Worker, separado do publisher; observabilidade agregada continua pendente.
+garantia de retenção infinita no broker. O [Pending Reference Worker](pending-reference-worker.md) está entregue na Task 11, separado do publisher; observabilidade agregada continua pendente.

@@ -1,6 +1,69 @@
 # Wagering: operações, estados e idempotência
 
+## Task 11 — resolução de referências
+
+Implementado na branch `feat/pending-reference-worker`, preservando a Task 10.
+O desafio (§7.1) exige backoff e limite/TTL, mas não fixa valores. O usuário
+aprovou nesta tarefa **24 horas configuráveis desde created_at**, backoff de
+1 segundo até 5 minutos e revalidação da elegibilidade antes de expirar.
+São políticas locais; não alteram o enunciado. [Operação](../pending-reference-worker.md).
+
+O worker seleciona PENDING_REFERENCE e PENDING com referência externa informada,
+incluindo referências opcionais aceitas pelo motor. PENDING sem referência e
+OPENING não são candidatos de recuperação de referência. Ele mantém a identidade,
+key, scope e hash da operação; não submete um comando novo.
+
+| Referência atual sob lock da wallet               | Dentro do TTL                            | TTL vencido                                  |
+| ------------------------------------------------- | ---------------------------------------- | -------------------------------------------- |
+| Ausente                                           | Esperar, last_error NOT_FOUND            | REJECTED / REFERENCE_NOT_FOUND_EXHAUSTED     |
+| PENDING ou PENDING_REFERENCE compatível           | Esperar, last_error NOT_PROCESSED        | REJECTED / REFERENCE_NOT_PROCESSED_EXHAUSTED |
+| PROCESSED compatível e elegível                   | Aplicar o motor compartilhado            | Aplicar o motor compartilhado                |
+| REJECTED ou FAILED compatível                     | REJECTED / REFERENCE_TERMINAL_INELIGIBLE | Mesma rejeição                               |
+| Contexto, tipo ou valor incompatível              | REJECTED / INCOMPATIBLE_REFERENCE        | Mesma rejeição                               |
+| Reversão duplicada/cumulativa ou débito sem saldo | Código aprovado da Task 06               | Mesmo código                                 |
+
+A referência é validada integralmente antes de sua decisão de estado. Assim,
+uma referência terminal com valor/contexto incompatível continua incompatível.
+Nenhuma equivalência adicional de gameId é exigida. Não há classificação técnica
+automática em FAILED. Uma falha SQL reverte a tentativa, sem rejeição de negócio.
+
+Espera não representa transição financeira: preserva o estado persistido e o
+snapshot idempotente aceito, inclusive PENDING_REFERENCE quando a referência já
+apareceu mas ainda aguarda outra operação. last_error diferencia a causa atual.
+Se um PENDING encontrar ausência, o caminho de domínio existente permite
+PENDING_REFERENCE; isso não cria outro evento de polling. Não há retorno
+PENDING_REFERENCE → PENDING. As transições terminais continuam as da tabela abaixo.
+
+ProcessWagerUseCase e ResolvePendingWagerUseCase usam a mesma função
+[processWager](../../src/modules/wagering/application/process-wager.ts) para
+referências, reversões e Wallet, e a mesma persistência de BalanceChange/ledger.
+O resolver trabalha com a entidade existente sob UnitOfWork: idempotência →
+identidade externa → wallet → validação/lock do claim e referência/histórico.
+Claims são adquiridos e confirmados antes, numa transação curta independente.
+
+Ao terminar, uma única transação confirma wallet/ledger aplicáveis, snapshot
+idempotente terminal, novos eventos v1 e UPDATE condicional da WagerTransaction
+com limpeza do claim. Esse UPDATE final exige token, estado esperado não terminal
+e lease válido no relógio SQL. Falha ou expiração reverte todos os participantes.
+O registro Wagering já existe, portanto o ledger não exige INSERT de outra operação.
+
+Idempotência usa lock do registro existente, sem INSERT. A atualização exige a
+mesma scope/key/hash, transaction_id e identidades do JSON original, cujo status
+deve ser PENDING/PENDING_REFERENCE. Só aceita destino PROCESSED/REJECTED; nunca
+sobrescreve terminal. Antes da resolução, replay devolve o snapshot pendente;
+durante a resolução, espera o lock; após commit, devolve terminal com o saldo
+histórico da resolução. Replay SQS da mesma Inbox continua apenas deduplicado;
+uma nova mensagem da mesma operação observa a idempotência evoluída.
+
+Só uma transição terminal acrescenta WagerTransactionProcessed ou
+WagerTransactionRejected; WalletBalanceChanged exige mudança real. O fato
+histórico de pendência permanece intacto. Espera, replay e claim perdido não
+criam eventos. [Persistência](../persistence.md#task-11--claims-de-referências)
+e [evidências](../task11-pending-report.md).
+
 ## Task 06 — políticas e contrato aprovados
+
+Registro das políticas da Task 06; a Task 11 acima implementa as extensões de recuperação então previstas.
 
 As decisões locais abaixo foram aprovadas na Task 06; complementam §§6–9 do desafio, sem serem exigências literais adicionais do original.
 
@@ -77,7 +140,7 @@ Modelo de referência registra id interno, providerId, externalTransactionId, id
 - O desafio proíbe repetir a mesma modalidade; a política adicional aprovada da Task 06 também proíbe modalidades cumulativas diretas. O núcleo mantém `POLICY_REQUIRED/CROSS_TYPE_REVERSAL`; a aplicação traduz em rejeição auditável conforme a política acima.
 - REFUND/ROLLBACK devem igualar o valor referenciado; reversão parcial fora do escopo.
 - Referência ausente exige PENDING_REFERENCE persistente e evento correspondente; worker agendado reprocessa com backoff exponencial.
-- Definir e justificar tentativas ou TTL. Ao esgotar, REJECTED com código que identifique referência inexistente e evento de rejeição. Valores e política de aquisição concorrente permanecem pendentes.
+- Definir e justificar tentativas ou TTL. Ao esgotar, REJECTED com código que identifique referência inexistente e evento de rejeição. Valores e aquisição concorrente estão definidos na Task 11 acima.
 - Reversão que produziria saldo negativo é rejeitada auditavelmente, com failureCode **distinto** da BET sem saldo. A taxonomia da Task 06 está definida acima.
 
 ## Estados e transições (§6.3)
@@ -161,7 +224,7 @@ Conferidos [migration inicial preservada](../../src/platform/persistence/migrati
 
 - IDs, tipos externos, cinco estados, Money decimal e referências cabem em `wager_transactions`. Modelo técnico admite OPENING e nulos de contexto que a entidade externa não aceita. Reidratação é mais restritiva que o SQL sobre coerência de datas/failureCode/identidade; dados legados precisam ser conferidos antes de um mapper.
 - `ProcessedWagerRecord` usa `null` para referências; a entidade usa `undefined`. O [mapper](../../src/modules/wagering/adapters/persistence/mappers.ts) converte explicitamente, exclui OPENING e reidrata todos os estados. `insert` persiste entidades; `save` altera somente não terminais; buscas por ID/identidade e histórico de reversões estão implementadas.
-- `attempts`, `next_attempt_at`, `last_attempt_at`, `last_error` e `updated_at` são metadados técnicos de aquisição, retry e persistência, fora da entidade. A política de tentativas/TTL não foi antecipada. Não há classe espelhando toda a tabela.
+- `attempts`, `next_attempt_at`, `last_attempt_at`, `last_error` e `updated_at` são metadados técnicos de aquisição, retry e persistência, fora da entidade. A política de tentativas/TTL está implementada na Task 11. Não há classe espelhando toda a tabela.
 - UNIQUE `(provider_id, external_transaction_id)`, índices parciais por modalidade e por referência e UNIQUE(scope,key) reforçam a coordenação. A [migration adicional](../../src/platform/persistence/migrations/Migration202610280002.ts) preserva o histórico anterior.
 - SQL admite zero estrutural; aplicação rejeita zero financeiro e Financial exige ledger positivo. Sem movimentação fictícia.
 - Saldo histórico/replay fica em `idempotency_records.original_result`, não em WagerTransaction. O [adapter idempotente](../../src/modules/wagering/adapters/persistence/mikro-orm-idempotency.repository.ts) reserva, lê sob lock e conclui o resultado na mesma sessão SQL.
@@ -170,7 +233,7 @@ Conferidos [migration inicial preservada](../../src/platform/persistence/migrati
 
 [test/wager-transaction.test.ts](../../test/wager-transaction.test.ts) executa com `bun test test/wager-transaction.test.ts`, sem banco, Docker ou rede. Protege criação/reidratação/encapsulamento, cinco operações, todas as transições expostas, terminais, falha sem mutação parcial, referências/contextos/valores incompatíveis, zero, ausência versus estado encontrado, reversões repetidas e pendência de modalidade cruzada.
 
-Essa suíte isolada não comprova garantias distribuídas. A Task 06 acrescenta [testes do caso de uso](../../test/process-wager.test.ts), [portas SQL](../../test/wagering-persistence.test.ts) e [processamento real multi-processo](../../test/process-wager-persistence.test.ts). Evidências financeiras ficam em [persistência](../persistence.md#task-06--processamento-atômico), e eventos/crash estão no [relatório da Task 07](../task07-outbox-report.md). A Task 09 acrescenta Inbox/SQS/ACK; publicação está entregue na Task 10; worker de referências permanece futuro.
+Essa suíte isolada não comprova garantias distribuídas. A Task 06 acrescenta [testes do caso de uso](../../test/process-wager.test.ts), [portas SQL](../../test/wagering-persistence.test.ts) e [processamento real multi-processo](../../test/process-wager-persistence.test.ts). Evidências financeiras ficam em [persistência](../persistence.md#task-06--processamento-atômico), e eventos/crash estão no [relatório da Task 07](../task07-outbox-report.md). A Task 09 acrescenta Inbox/SQS/ACK; publicação está entregue na Task 10; worker de referências está entregue na Task 11 acima.
 
 Histórico do checkpoint anterior, núcleo Wagering (2026-10-28, Windows/PowerShell, Bun 1.4.4):
 
@@ -194,12 +257,12 @@ HTTP exige header Idempotency-Key como fonte da verdade; `"{providerId}:{externa
 
 Canonicalização, algoritmo, campos, escopo e armazenamento estão definidos no contrato da Task 06 acima e implementados em [canonical-wager.ts](../../src/modules/wagering/application/canonical-wager.ts).
 
-Repetição idêntica devolve **resultado original**, inclusive saldo histórico quando PROCESSED; resposta marca idempotentReplay true. Rejeições e pendências também têm replay sem efeitos. Evolução futura de resultados pendentes segue o contrato acima, preservando terminalidade e resultado processado original.
+Repetição idêntica devolve **resultado original**, inclusive saldo histórico quando PROCESSED; resposta marca idempotentReplay true. Rejeições e pendências também têm replay sem efeitos. Evolução de resultados pendentes implementada na Task 11 segue o contrato acima, preservando terminalidade e resultado processado original.
 
 ## Limitações e próximas etapas
 
-- Worker de referências, aquisição de operações persistidas pendentes, atualização condicionada de seu resultado, backoff/TTL e esgotamento não estão implementados.
+- Worker de referências, aquisição, atualização idempotente condicionada, backoff/TTL e esgotamento estão implementados na Task 11 acima.
 - Eventos e inserção Outbox estão implementados pela Task 07; HTTP pela Task 08. Inbox, SQS, ACK/DLQ e diagnósticos de transporte estão entregues na Task 09. Publicação está entregue na Task 10; observabilidade completa/exportação permanece futura.
 - FAILED permanece suportado pelo domínio/persistência; nenhuma falha técnica é classificada automaticamente como permanente nesta etapa.
 
-Requisitos de eventos estão em [Messaging](messaging.md); status, validação runtime, header e exemplos estão em [HTTP](../http-api.md). HTTP retorna 200 PROCESSED, 202 PENDING/PENDING_REFERENCE e 422 REJECTED, preservando resultado/failureCode/replay. QueryWagerUseCase consulta identidades interna/externa e enumera DTOs sem key/hash/ORM; OPENING não é transação externa consultável. Retry de entrada é limitado pela redrive de Messaging; retry agendado de referências permanece futuro. A garantia entregue é processamento financeiro efetivamente único por identidade/idempotência, sobre transporte at-least-once, sem promessa de exactly-once delivery.
+Requisitos de eventos estão em [Messaging](messaging.md); status, validação runtime, header e exemplos estão em [HTTP](../http-api.md). HTTP retorna 200 PROCESSED, 202 PENDING/PENDING_REFERENCE e 422 REJECTED, preservando resultado/failureCode/replay. QueryWagerUseCase consulta identidades interna/externa e enumera DTOs sem key/hash/ORM; OPENING não é transação externa consultável. Retry de entrada é limitado pela redrive de Messaging; retry agendado de referências está implementado na Task 11. A garantia entregue é processamento financeiro efetivamente único por identidade/idempotência, sobre transporte at-least-once, sem promessa de exactly-once delivery.

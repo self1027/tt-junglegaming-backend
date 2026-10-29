@@ -69,7 +69,7 @@ O HTTP exige walletId. O caso de uso verifica que ele corresponde à wallet reso
 }
 ```
 
-Replay mantém a mesma resposta e código HTTP do resultado, com idempotentReplay true e saldo histórico, mesmo após outras movimentações. Mesma key/payload divergente retorna 409 IDEMPOTENCY_CONFLICT. Mesmo provider/ID externo com outra key retorna 409 EXTERNAL_TRANSACTION_CONFLICT; não cria nova REJECTED. Providers distintos têm escopos independentes. Hash e igualdade seguem integralmente o [contrato canônico](domain/wagering.md#entrada-saída-e-identidade).
+Replay mantém a mesma resposta e código HTTP do resultado terminal, com idempotentReplay true e saldo histórico, mesmo após outras movimentações. Mesma key/payload divergente retorna 409 IDEMPOTENCY_CONFLICT. Mesmo provider/ID externo com outra key retorna 409 EXTERNAL_TRANSACTION_CONFLICT; não cria nova REJECTED. Providers distintos têm escopos independentes. Hash e igualdade seguem integralmente o [contrato canônico](domain/wagering.md#entrada-saída-e-identidade).
 
 Consultas de transação enumeram transactionId/providerId/externalTransactionId/walletId/playerId/roundId/gameId/kind/money/status, referências e failureCode quando presentes, createdAt e processedAt quando aplicável. Não expõem key/hash, metadados SQL ou saldo atual como se fosse histórico. OPENING pode ser auditado pelo ledger; não é entidade externa Wagering.
 
@@ -140,4 +140,4 @@ curl -i "$BASE/health/ready" # 200 com PostgreSQL/SQS saudáveis; 503 se ausente
 
 `bun test test/wallet-use-cases.test.ts test/http-input.test.ts` cobre aplicação e validação. `bun test test/http-api.test.ts` usa Nest e PostgreSQL descartável reais, abertura/falhas/reversões/paginação/erros/replay/Outbox/reconciliação. `bun test test/http-concurrency.test.ts` usa três servidores Bun independentes, barreiras transacionais e observação de espera SQL: 100/80/80, 50 duplicatas, wallets distintas, abertura concorrente, snapshot e perda da resposta após commit. A suíte completa mantém os crashes anteriores e regressões financeiras da Task 07. [Relatório](task08-http-report.md).
 
-A Task 09 entrega [SQS/LocalStack, Inbox, consumer, ACK/DLQ e retry de entrada](sqs-consumer.md), com readiness real. Publisher e worker continuam futuros; Outbox permanece PENDING. Pendências Wagering não evoluem sem o futuro worker. Não se anuncia entrega exactly-once.
+A Task 09 entrega [SQS/LocalStack, Inbox, consumer, ACK/DLQ e retry de entrada](sqs-consumer.md), com readiness real. O [publisher](outbox-publisher.md) e o [worker de referências](pending-reference-worker.md) estão implementados nas Tasks 10 e 11. Snapshot pendente evolui atomicamente para terminal pelo worker: replay anterior retorna 202, replay após resolução retorna 200 ou 422 conforme o resultado confirmado; replay durante a resolução espera o lock idempotente. Saldo de PROCESSED permanece histórico. Outbox publica apenas depois do commit. Não se anuncia entrega exactly-once.

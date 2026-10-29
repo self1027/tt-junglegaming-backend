@@ -1,6 +1,6 @@
 # Messaging: entrada, eventos e recuperação
 
-Requisitos **explícitos** dos §§3, 5, 6.0, 6.5, 7.1 e 9–13 de [challenge.md](../challenge.md), fonte primária imutável. Fronteiras/processos são decisões de [ARCHITECTURE.md](../../ARCHITECTURE.md). A Task 07 implementa eventos tipados e inserção transacional na Outbox pelo ProcessWagerUseCase. A Task 08 expõe esse mesmo fluxo por [HTTP](../http-api.md). A Task 09 acrescenta SQS FIFO, Inbox e consumer independente. A Task 10 implementa publicação recuperável por processo independente; referências continuam aguardando o futuro worker.
+Requisitos **explícitos** dos §§3, 5, 6.0, 6.5, 7.1 e 9–13 de [challenge.md](../challenge.md), fonte primária imutável. Fronteiras/processos são decisões de [ARCHITECTURE.md](../../ARCHITECTURE.md). A Task 07 implementa eventos tipados e inserção transacional na Outbox pelo ProcessWagerUseCase. A Task 08 expõe esse mesmo fluxo por [HTTP](../http-api.md). A Task 09 acrescenta SQS FIFO, Inbox e consumer independente. A Task 10 implementa publicação recuperável por processo independente; referências são resolvidas pelo worker independente da Task 11.
 
 ## Entradas HTTP e SQS (§§9–10)
 
@@ -145,6 +145,18 @@ erros recuperáveis e procedimentos pertencem à operação, sem duplicação aq
 
 ## Eventos de integração (§11)
 
+### Resolução de referências — Task 11
+
+O worker SQL da Task 11 persiste **novos** eventos v1 somente para a transição
+terminal: Processed e WalletBalanceChanged quando houver saldo, ou Rejected sem
+saldo. Cada novo fato recebe eventId próprio, correlationId da operação original
+e occurredAt da resolução sob lock. O fato antigo de pendência não muda. Espera,
+replay ou claim perdido não geram eventos. Nenhum novo tipo/versão é necessário.
+Idempotência e eventos terminais participam da mesma UnitOfWork financeira;
+publicação continua exclusivamente pelo publisher da Task 10. Inbox original
+permanece concluída e não precisa ser reaberta. [Contrato](wagering.md#task-11--resolução-de-referências)
+e [pipeline HTTP/SQS/worker/publisher real](../task11-pending-report.md).
+
 | Evento mínimo                    | Quando                                                              |
 | -------------------------------- | ------------------------------------------------------------------- |
 | WagerTransactionProcessed        | Qualquer transação aplicada, inclusive LOSS                         |
@@ -219,9 +231,9 @@ Evolução: o significado de um par `(eventType, version)` persistido é permane
 Alterar campos obrigatórios, semântica ou representação exige nova versão e suporte
 explícito do consumidor; produtores/consumidores devem planejar coexistência.
 Não reconstruir eventos históricos usando o estado atual nem atualizar payloads
-antigos para representar nova transição. Uma futura resolução de pendência insere
+antigos para representar nova transição. A resolução de pendência da Task 11 insere
 novos fatos e atualiza somente estado/resultado pendente conforme o contrato Wagering,
-na mesma transação SQL; o worker não está implementado.
+na mesma transação SQL; o worker está implementado na Task 11.
 
 Contrato do publisher implementado na Task 10: ler o envelope persistido, preservar eventId,
 version, dados e correlação em toda republicação; publicar somente após commit.
