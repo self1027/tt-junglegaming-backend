@@ -21,14 +21,25 @@ import type {
 } from '../public/process-wager.js';
 import { prepareWager } from './canonical-wager.js';
 import { wagerEvents } from './wager-events.js';
+import type { InboxDelivery } from '../public/inbox.js';
 
 export class ProcessWagerUseCase {
 	constructor(private readonly unitOfWork: WageringUnitOfWork) {}
 
-	async execute(command: ProcessWagerCommand): Promise<ProcessWagerResult> {
+	execute(command: ProcessWagerCommand): Promise<ProcessWagerResult>;
+	execute(
+		command: ProcessWagerCommand,
+		delivery: InboxDelivery,
+	): Promise<ProcessWagerResult | undefined>;
+	async execute(
+		command: ProcessWagerCommand,
+		delivery?: InboxDelivery,
+	): Promise<ProcessWagerResult | undefined> {
 		const prepared = await prepareWager(command);
 		const scope = `wagering:v1:${JSON.stringify(prepared.providerId)}`;
-		return this.unitOfWork.execute(async context => {
+		const apply = async (
+			context: WageringTransactionContext,
+		): Promise<ProcessWagerResult> => {
 			const claim = await context.idempotency.claim(
 				scope,
 				prepared.idempotencyKey,
@@ -109,6 +120,17 @@ export class ProcessWagerUseCase {
 				prepared.payloadHash,
 				result,
 			);
+			return result;
+		};
+		return this.unitOfWork.execute(async context => {
+			if (delivery !== undefined) {
+				if (context.inbox === undefined)
+					throw new Error('Inbox participation is not configured');
+				if ((await context.inbox.claim(delivery)) === 'PROCESSED')
+					return undefined;
+			}
+			const result = await apply(context);
+			if (delivery !== undefined) await context.inbox?.complete(delivery);
 			return result;
 		});
 	}

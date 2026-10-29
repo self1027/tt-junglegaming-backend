@@ -7,6 +7,7 @@ import type { WagerTransaction } from '../domain/wager-transaction.js';
 import type { WagerReversalKind } from '../domain/wager-types.js';
 import type { ProcessWagerResult } from './process-wager.js';
 import type { OutboxRepository } from './events.js';
+import type { InboxRepository } from './inbox.js';
 
 /** Compatibility contract for technical insertion; the use case persists domain entities. */
 export interface ProcessedWagerRecord {
@@ -71,6 +72,7 @@ export interface IdempotencyRepository {
 }
 
 export interface WageringTransactionContext extends FinancialTransactionContext {
+	readonly inbox?: InboxRepository;
 	readonly transactions: WagerTransactionRepository;
 	readonly idempotency: IdempotencyRepository;
 	readonly outbox: OutboxRepository;

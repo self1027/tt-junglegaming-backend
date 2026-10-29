@@ -1,5 +1,7 @@
 export { WagerTransaction } from '../domain/wager-transaction.js';
 export { WagerApplicationError } from './process-wager.js';
+export { InboxPayloadConflict } from './inbox.js';
+export type { InboxDelivery, InboxRepository } from './inbox.js';
 export { IntegrationEvent } from './integration-event.js';
 export type { IntegrationEventProps } from './integration-event.js';
 export {
