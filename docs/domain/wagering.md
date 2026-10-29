@@ -50,7 +50,7 @@ Migration adicional cria UNIQUE(reference_transaction_id) parcial para REFUND/RO
 
 `IDEMPOTENCY_CONFLICT`, `EXTERNAL_TRANSACTION_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS`, `WALLET_NOT_FOUND` são erros de aplicação, não failureCode de nova transação. Exceções SQL/lock/conexão preservam causa/código, não expõem payload completo e não são convertidas em rejeição. O adapter SQS usa resultados/erros tipados para diagnóstico seguro, sem registrar payloads completos.
 
-Requisitos **explícitos** dos §§3, 6.0, 6.3–6.4, 7–11 e 13 de [challenge.md](../challenge.md). O original permanece primário e imutável. A [Arquitetura](../../ARCHITECTURE.md) aprova [ProcessWagerUseCase](../../src/modules/wagering/application/process-wager.use-case.ts) como orquestrador compartilhado por HTTP e SQS. Domínio, caso de uso, idempotência, efeitos transacionais, eventos Outbox e HTTP estão implementados. SQS/Inbox/ACK estão entregues na Task 09; publicação continua futura.
+Requisitos **explícitos** dos §§3, 6.0, 6.3–6.4, 7–11 e 13 de [challenge.md](../challenge.md). O original permanece primário e imutável. A [Arquitetura](../../ARCHITECTURE.md) aprova [ProcessWagerUseCase](../../src/modules/wagering/application/process-wager.use-case.ts) como orquestrador compartilhado por HTTP e SQS. Domínio, caso de uso, idempotência, efeitos transacionais, eventos Outbox e HTTP estão implementados. SQS/Inbox/ACK estão entregues na Task 09; [publicação recuperável](../outbox-publisher.md) na Task 10.
 
 A [integração financeira](../persistence.md#integração-financeira-e-unitofwork) participa do mesmo contexto estendido com WagerTransactionRepository e IdempotencyRepository. `insertProcessed` permanece compatível com os testes anteriores; o processador usa entidades e mappers explícitos. OPENING continua interno a Financial, sobre armazenamento técnico compartilhado; não pertence ao tipo público de operação do provider.
 
@@ -170,7 +170,7 @@ Conferidos [migration inicial preservada](../../src/platform/persistence/migrati
 
 [test/wager-transaction.test.ts](../../test/wager-transaction.test.ts) executa com `bun test test/wager-transaction.test.ts`, sem banco, Docker ou rede. Protege criação/reidratação/encapsulamento, cinco operações, todas as transições expostas, terminais, falha sem mutação parcial, referências/contextos/valores incompatíveis, zero, ausência versus estado encontrado, reversões repetidas e pendência de modalidade cruzada.
 
-Essa suíte isolada não comprova garantias distribuídas. A Task 06 acrescenta [testes do caso de uso](../../test/process-wager.test.ts), [portas SQL](../../test/wagering-persistence.test.ts) e [processamento real multi-processo](../../test/process-wager-persistence.test.ts). Evidências financeiras ficam em [persistência](../persistence.md#task-06--processamento-atômico), e eventos/crash estão no [relatório da Task 07](../task07-outbox-report.md). A Task 09 acrescenta Inbox/SQS/ACK; publicação e recuperação de workers continuam futuras.
+Essa suíte isolada não comprova garantias distribuídas. A Task 06 acrescenta [testes do caso de uso](../../test/process-wager.test.ts), [portas SQL](../../test/wagering-persistence.test.ts) e [processamento real multi-processo](../../test/process-wager-persistence.test.ts). Evidências financeiras ficam em [persistência](../persistence.md#task-06--processamento-atômico), e eventos/crash estão no [relatório da Task 07](../task07-outbox-report.md). A Task 09 acrescenta Inbox/SQS/ACK; publicação está entregue na Task 10; worker de referências permanece futuro.
 
 Histórico do checkpoint anterior, núcleo Wagering (2026-10-28, Windows/PowerShell, Bun 1.4.4):
 
@@ -199,7 +199,7 @@ Repetição idêntica devolve **resultado original**, inclusive saldo histórico
 ## Limitações e próximas etapas
 
 - Worker de referências, aquisição de operações persistidas pendentes, atualização condicionada de seu resultado, backoff/TTL e esgotamento não estão implementados.
-- Eventos e inserção Outbox estão implementados pela Task 07; HTTP pela Task 08. Inbox, SQS, ACK/DLQ e diagnósticos de transporte estão entregues na Task 09. Publicação e observabilidade completa/exportação permanecem futuras.
+- Eventos e inserção Outbox estão implementados pela Task 07; HTTP pela Task 08. Inbox, SQS, ACK/DLQ e diagnósticos de transporte estão entregues na Task 09. Publicação está entregue na Task 10; observabilidade completa/exportação permanece futura.
 - FAILED permanece suportado pelo domínio/persistência; nenhuma falha técnica é classificada automaticamente como permanente nesta etapa.
 
 Requisitos de eventos estão em [Messaging](messaging.md); status, validação runtime, header e exemplos estão em [HTTP](../http-api.md). HTTP retorna 200 PROCESSED, 202 PENDING/PENDING_REFERENCE e 422 REJECTED, preservando resultado/failureCode/replay. QueryWagerUseCase consulta identidades interna/externa e enumera DTOs sem key/hash/ORM; OPENING não é transação externa consultável. Retry de entrada é limitado pela redrive de Messaging; retry agendado de referências permanece futuro. A garantia entregue é processamento financeiro efetivamente único por identidade/idempotência, sobre transporte at-least-once, sem promessa de exactly-once delivery.

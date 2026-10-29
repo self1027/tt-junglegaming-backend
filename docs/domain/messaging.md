@@ -1,6 +1,6 @@
 # Messaging: entrada, eventos e recuperação
 
-Requisitos **explícitos** dos §§3, 5, 6.0, 6.5, 7.1 e 9–13 de [challenge.md](../challenge.md), fonte primária imutável. Fronteiras/processos são decisões de [ARCHITECTURE.md](../../ARCHITECTURE.md). A Task 07 implementa eventos tipados e inserção transacional na Outbox pelo ProcessWagerUseCase. A Task 08 expõe esse mesmo fluxo por [HTTP](../http-api.md). A Task 09 acrescenta SQS FIFO, Inbox e consumer independente. Publicação continua futura; Outbox permanece PENDING.
+Requisitos **explícitos** dos §§3, 5, 6.0, 6.5, 7.1 e 9–13 de [challenge.md](../challenge.md), fonte primária imutável. Fronteiras/processos são decisões de [ARCHITECTURE.md](../../ARCHITECTURE.md). A Task 07 implementa eventos tipados e inserção transacional na Outbox pelo ProcessWagerUseCase. A Task 08 expõe esse mesmo fluxo por [HTTP](../http-api.md). A Task 09 acrescenta SQS FIFO, Inbox e consumer independente. A Task 10 implementa publicação recuperável por processo independente; referências continuam aguardando o futuro worker.
 
 ## Entradas HTTP e SQS (§§9–10)
 
@@ -91,7 +91,57 @@ Não há promessa de conclusão após SIGKILL. SDK/pool fecham no caminho normal
 
 Evento confirmado é persistido com efeitos financeiros no commit. Worker publica depois, com múltiplos publishers concorrentes, sem perder eventos nem duplicá-los indefinidamente. Modelo de referência inclui id, aggregateId, eventType, payload readonly, occurredAt, attempts, nextAttemptAt e publishedAt; consultas pending/due e transições de publicação/retry com backoff.
 
-Falha entre publicação e marcação pode causar republicação: preservar eventId estável e envelope persistido; consumidor tolera duplicatas. A entrega é **at-least-once**, não exactly-once. Claims, leases/locks e política exata de backoff/limites ainda não escolhidos. Outbox Publisher e Pending Reference Processor são componentes distintos; o segundo resolve referências com política descrita em [Wagering](wagering.md).
+Falha entre publicação e marcação pode causar republicação: preservar eventId estável e envelope persistido; consumidor tolera duplicatas. A entrega é **at-least-once**, não exactly-once. Claims persistentes com lease/fencing e backoff estão implementados na Task 10 abaixo. Outbox Publisher e Pending Reference Processor são componentes distintos; o segundo resolve referências com política descrita em [Wagering](wagering.md).
+
+## Task 10 — publicação recuperável
+
+Outbox Publisher é infraestrutura de integração independente de HTTP/consumer e
+não executa regras financeiras. [Operação/configuração](../outbox-publisher.md),
+[porta técnica](../../src/platform/messaging/outbox.ts),
+[adapter SQL](../../src/platform/persistence/mikro-orm-outbox-store.ts) e
+[adapter SQS](../../src/modules/wagering/adapters/sqs/sqs-event-publisher.ts).
+
+Fila de saída `wager-events.fifo`, distinta de comandos/DLQ, com retenção de
+14 dias no provisionamento local. MessageDeduplicationId = eventId persistido;
+MessageGroupId = data.walletId nos quatro eventos v1. O JSON público preserva
+version/data e todos os valores históricos, com ordenação recursiva das chaves.
+Validação reutiliza os contratos existentes e confere igualdade integral, sem
+normalização silenciosa ou reconstrução a partir do estado atual.
+
+Ordem exigida pelo desafio: correção financeira por wallet no banco. A saída
+oferece somente FIFO por ordem de chegada no grupo, sem ordem de commit, ordem
+global ou ordem fixa entre eventos irmãos sob publishers concorrentes. Não se
+adiciona sequência global. Deduplicação SQS dura cinco minutos; consumidor
+posterior precisa tolerar duplicatas por eventId além dessa janela.
+
+Aquisição: transação curta READ COMMITTED, seleção PENDING/due por índice
+(next_attempt_at, created_at, id), FOR UPDATE SKIP LOCKED, token UUID novo por
+claim, claimed_by, claimed_until e incremento de attempts. Commit antes de envio.
+Batch não supera concorrência; nenhum claim aguarda vaga. Não há mutex global
+nem lock SQL durante rede. `attempts` conta claims confirmados, incluindo crash
+antes do envio; consultas não contam. Lease sem renovação infinita, dimensionado
+para timeout total SQS e margem SQL. SDK faz uma tentativa por claim.
+
+Finalização e retry condicionam eventId/token/PENDING/lease válido. Expiração
+permite readquisição e token novo, inclusive com o mesmo owner. Sucesso SQS com
+MessageId/SequenceNumber antecede UPDATE PUBLISHED/published_at e limpeza do claim.
+Zero updates consulta estado para diagnosticar ALREADY_PUBLISHED/CLAIM_LOST/
+LEASE_EXPIRED/MISSING; não presume que o dono antigo persistiu sucesso. Schema
+protege envelope histórico e impede alteração de PUBLISHED. Não se apaga Outbox.
+
+Falha transitória aplica backoff exponencial limitado com jitter entre mínimo e
+teto; falha permanente aguarda o máximo. Tentativas ilimitadas, sem estado terminal
+ou descarte. last_error recebe somente código permitido e next_attempt_at usa
+relógio SQL. Falha ao persistir retry/finalização mantém lease recuperável; aceite
+SQS seguido de SQL incerto pode causar republicação idêntica. A janela é parte da
+semântica at-least-once. Erro de um evento não abandona os demais.
+
+Startup valida configuração/SQL/fila. Diagnóstico periódico registra loop,
+dependências, PENDING/leases expirados/lag e contadores locais. SIGTERM interrompe
+novas aquisições e drena até prazo; SDK/pool fecham normalmente. Prazo excedido
+sai 1, sem confirmação falsa, com recuperação por lease; SIGKILL não depende de
+hooks. Readiness da API mantém suas dependências atuais. Configuração completa,
+erros recuperáveis e procedimentos pertencem à operação, sem duplicação aqui.
 
 ## Eventos de integração (§11)
 
@@ -104,7 +154,7 @@ Falha entre publicação e marcação pode causar republicação: preservar even
 
 Envelope é **classe abstrata IntegrationEvent com subclasse concreta por evento**. eventType e version pertencem ao tipo, não a strings soltas no chamador. Campos: eventId, eventType, aggregateId, correlationId, causationId opcional, occurredAt, version e data readonly. Serialização da data de ocorrência em ISO-8601; envelope JSON estável/versionável vai no payload da Outbox. Valores monetários em data usam MoneyProps (strings decimais), nunca instância Money.
 
-O exemplo WalletBalanceChanged usa version 1 e data com walletId, transactionId, direction, money, balanceBefore, balanceAfter e walletVersion; não define automaticamente todos os contratos de data dos outros eventos. Destinos/filas de eventos e seus ajustes ainda estão pendentes.
+O exemplo WalletBalanceChanged usa version 1 e data com walletId, transactionId, direction, money, balanceBefore, balanceAfter e walletVersion; não define automaticamente todos os contratos de data dos outros eventos. A saída usa wager-events.fifo conforme a Task 10 abaixo.
 
 ### Task 07 — protocolo v1 implementado
 
@@ -173,12 +223,12 @@ antigos para representar nova transição. Uma futura resolução de pendência 
 novos fatos e atualiza somente estado/resultado pendente conforme o contrato Wagering,
 na mesma transação SQL; o worker não está implementado.
 
-Contrato mínimo do futuro publisher: ler o envelope persistido, preservar eventId,
+Contrato do publisher implementado na Task 10: ler o envelope persistido, preservar eventId,
 version, dados e correlação em toda republicação; publicar somente após commit.
 PENDING/attempts 0/published_at nulo significam intenção durável, não publicação
 confirmada. A janela publicar/marcar permite duplicatas: consumidores deverão
-deduplicar por eventId estável. Claims/leases, backoff, destinos, confirmação incerta
-e testes de publicação continuam pendentes; não há garantia end-to-end ou exactly-once delivery.
+deduplicar por eventId estável. A Task 10 concretiza claims/leases, backoff, destino e confirmação incerta;
+continua sem garantia de exactly-once delivery.
 
 ## Falhas, ACK, redelivery e DLQ (§§3, 10–11)
 
@@ -200,8 +250,8 @@ Recebimentos repetidos não justificam crédito/débito/evento financeiro novos.
 [Testes de entrada](../../test/sqs-consumer.test.ts), [Inbox SQL](../../test/inbox.test.ts),
 [SQS real](../../test/sqs.test.ts) e [Docker/SIGTERM](../../test/consumer-docker.test.ts)
 exercitam PostgreSQL 18.3 e LocalStack 4.14.0 descartáveis, três processos Bun,
-atomicidade, HTTP ↔ SQS, redelivery/crashes, indisponibilidade e redrive. Dois
-publishers concorrentes e recuperação de publicação permanecem futuros. Métricas
+atomicidade, HTTP ↔ SQS, redelivery/crashes, indisponibilidade e redrive. Publicadores concorrentes e recuperação estão implementados na
+[Task 10](../outbox-publisher.md). Métricas
 completas/exportação continuam pendentes; diagnósticos JSON do consumer incluem
 status, duplicatas, retries, receive count, falha de ACK/visibilidade e latência,
 sem payload completo/credenciais. [Relatório](../task09-sqs-report.md).

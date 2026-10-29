@@ -2,7 +2,7 @@
 
 Contratos/identidades/atomicidade: [Messaging](domain/messaging.md#task-09--protocolo-de-recepção-implementado).
 Semântica financeira/replay: [Wagering](domain/wagering.md). Resultados executados:
-[relatório Task 09](task09-sqs-report.md). Não há publisher nem worker de referências.
+[relatório Task 09](task09-sqs-report.md). A [Task 10](outbox-publisher.md) acrescenta publisher de saída independente; worker de referências permanece futuro.
 
 ## Ambiente local
 
@@ -25,7 +25,7 @@ provisione novamente. O procedimento não pretende emular a durabilidade da AWS.
 Testes usam projetos/portas dinâmicos e removem somente seus próprios recursos.
 
 `sqs:provision` é explícito, exige endpoint customizado e respeita visibility e
-maxReceiveCount do ambiente. Cria `wager-transactions.fifo` e
+maxReceiveCount do ambiente. Cria também a saída `wager-events.fifo` (Task 10) e mantém `wager-transactions.fifo` e
 `wager-transactions-dlq.fifo`, sem content-based dedup, com retenções respectivas
 de 4 e 14 dias, long poll 20s, redrive para a DLQ e permissão byQueue da origem.
 Não chama esse script em produção. API/consumer nunca criam filas no startup.
