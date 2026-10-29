@@ -1,4 +1,19 @@
 services:
+    localstack:
+        profiles: [sqs]
+        image: localstack/localstack:4.14.0@sha256:3ebc37595918b8accb852f8048fef2aff047d465167edd655528065b07bc364a
+        environment:
+            SERVICES: sqs
+            AWS_DEFAULT_REGION: us-east-1
+            SQS_ENDPOINT_STRATEGY: dynamic
+        ports:
+            - '127.0.0.1:${SQS_PORT:-4566}:4566'
+        healthcheck:
+            test: [CMD, awslocal, sqs, list-queues]
+            interval: 2s
+            timeout: 5s
+            retries: 30
+            start_period: 5s
     postgres:
         image: postgres:18.3-bookworm@sha256:80630f83606d8db77d30b3851b16a9f78be2d0d4dda6f7b82a1fdca5ebe3acba
         environment:

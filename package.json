@@ -11,6 +11,9 @@
 		"dev": "bun --watch src/main.api.ts",
 		"build": "bun build.ts",
 		"start": "bun dist/main.api.js",
+		"consumer": "bun src/main.consumer.ts",
+		"consumer:start": "bun dist/main.consumer.js",
+		"sqs:provision": "bun src/platform/messaging/provision-sqs.ts",
 		"typecheck": "bun --bun tsc --noEmit",
 		"lint": "bun --bun eslint . --max-warnings=0 && bun run architecture",
 		"lint:fix": "bun --bun eslint . --fix --max-warnings=0 && bun run architecture",
@@ -28,6 +31,7 @@
 		"db:status": "bun --bun mikro-orm migration:list --config src/platform/persistence/mikro-orm.config.ts && bun --bun mikro-orm migration:pending --config src/platform/persistence/mikro-orm.config.ts"
 	},
 	"dependencies": {
+		"@aws-sdk/client-sqs": "3.1159.0",
 		"@mikro-orm/core": "7.2.5",
 		"@mikro-orm/migrations": "7.2.5",
 		"@mikro-orm/nestjs": "7.1.0",
