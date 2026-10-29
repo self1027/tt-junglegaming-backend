@@ -103,27 +103,27 @@ antes de enviar **13576 → 10272**, após enviar **2776 → 4892**, e após fal
 Validação consolidada em 2026-10-29. A suíte completa preservou os 346 testes
 anteriores e acrescentou 42, sem falhas. Resultados selecionados e consolidados:
 
-| Comando/check                               | Resultado                                                      |
-| ------------------------------------------- | -------------------------------------------------------------- |
-| bun run typecheck                           | Passou                                                         |
-| bun run lint                                | Passou; 93 módulos/328 dependências; zero violações            |
-| bun test test/publisher.test.ts             | 19 passaram, 0 falharam, 84 asserções                          |
-| bun test test/publisher-persistence.test.ts | 7 passaram, 0 falharam, 60 asserções; reconferido pelo revisor |
-| bun test test/publisher-sqs.test.ts         | 9 passaram, 0 falharam, 107 asserções, 67,76s                  |
-| bun test test/publisher-docker.test.ts      | 3 passaram, 0 falharam, 15 asserções, 37,47s                   |
-| bun run build                               | Passou                                                         |
+| Comando/check                                                            | Resultado                                                      |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| bun run typecheck                                                        | Passou                                                         |
+| bun run lint                                                             | Passou; 93 módulos/328 dependências; zero violações            |
+| bun test test/publisher.test.ts                                          | 19 passaram, 0 falharam, 84 asserções                          |
+| bun test test/publisher-persistence.test.ts                              | 7 passaram, 0 falharam, 60 asserções; reconferido pelo revisor |
+| bun test test/publisher-pipeline.test.ts test/publisher-recovery.test.ts | 9 passaram, 0 falharam, 107 asserções, 93,02s                  |
+| bun test test/publisher-docker.test.ts                                   | 3 passaram, 0 falharam, 15 asserções, 37,47s                   |
+| bun run build                                                            | Passou                                                         |
 
-`bun run test`: **388 passaram, 0 falharam, 3.389 asserções, 27 arquivos, 356,78s**.
+`bun run test`: **388 passaram, 0 falharam, 3.389 asserções, 28 arquivos, 378,46s**.
 Inclui regressões HTTP, Inbox/consumer/DLQ, três processos de entrada e saída,
 migrations reais e Docker build/smoke/SIGTERM de API, consumer e publisher.
-`bun run format:check` e `git diff --check` passaram; 339 links/âncoras locais
+`bun run format:check` e `git diff --check` passaram; 344 links/âncoras locais
 conferidos em 13 documentos alterados/novos, UTF-8 e ausência de frontmatter
 inesperado. Nenhuma skill foi alterada. Todos os containers/volumes descartáveis
 da validação foram removidos; imagens locais de smoke permanecem disponíveis.
 
 Graphify foi consultado antes da exploração; o índice inicialmente desatualizado
-foi atualizado antes de localizar Outbox/SQS. Atualização final: **1.198 nós e
-3.036 relações**, sem LLM/API. `graph:query OutboxPublisher` localizou portas,
+foi atualizado antes de localizar Outbox/SQS. Atualização final: **1.202 nós e
+3.070 relações**, sem LLM/API. `graph:query OutboxPublisher` localizou portas,
 loop, adapter SQL/SQS e composição; `graph:path PublisherModule MikroOrmOutboxStore`
 confirmou o caminho estrutural da composição. Sete arquivos não fornecem símbolos
 individuais, incluindo main.publisher.ts e barrels; entrypoint/imports foram
@@ -140,6 +140,18 @@ integrações passaram. Um primeiro teste Docker leu só stdout e não encontrou
 diagnóstico de deadline emitido em stderr; o harness passou a ler ambos e o
 cenário completo de deadline/recuperação passou. Não se contam execuções falhas
 como aprovação.
+
+A divisão dos testes SQS em pipeline e recuperação introduziu duas falhas no
+harness: os recursos eram capturados antes do beforeAll, e os hooks eram
+registrados somente ao importar um módulo compartilhado em cache. Os nove
+cenários passaram após criar um harness por arquivo e acessar os recursos
+inicializados pelos getters da instância.
+
+A reexecução completa isolou uma falha adicional (387 passaram, uma falhou): o
+teardown do teste de drenagem escrevia no stdin já fechado pelo consumer, antes
+de o pai observar seu exitCode, provocando EPIPE. O helper agora respeita o
+evento closed e continua verificando o código de saída. O cenário de drenagem
+passou isoladamente, incluindo close repetido antes do teardown automático.
 
 ## Revisão independente
 
@@ -168,10 +180,12 @@ Criados:
   [ciclo de vida](../src/bootstrap/run-publisher.ts) e
   [entrypoint](../src/main.publisher.ts).
 - [Unidade](../test/publisher.test.ts), [SQL](../test/publisher-persistence.test.ts),
-  [SQS/distribuído](../test/publisher-sqs.test.ts),
+  [pipeline SQS/distribuído](../test/publisher-pipeline.test.ts),
+  [recuperação SQL/SQS](../test/publisher-recovery.test.ts),
   [Docker](../test/publisher-docker.test.ts),
-  [fixtures](../test/support/outbox.ts), [controle de processo](../test/support/publisher-child.ts)
-  e [composição de falhas de teste](../test/support/publisher-process.ts).
+  [fixtures](../test/support/outbox.ts), [controle de processo](../test/support/publisher-child.ts),
+  [composição de falhas de teste](../test/support/publisher-process.ts) e
+  [harness isolado](../test/support/publisher-sqs-suite.ts).
 - [Operação](outbox-publisher.md) e este relatório.
 
 Modificados:
@@ -185,6 +199,8 @@ Modificados:
   [provisionamento](../src/platform/messaging/provision-sqs.ts).
 - [Arquitetura negativa](../test/architecture.test.ts) e
   [fundação SQL](../test/persistence.test.ts).
+- [Drenagem do consumer](../test/sqs-consumer.test.ts) e
+  [teardown de processo](../test/support/consumer-child.ts).
 - [AGENTS raiz](../AGENTS.md), [bootstrap](../src/bootstrap/AGENTS.md),
   [Messaging](../src/platform/messaging/AGENTS.md) e
   [Persistence](../src/platform/persistence/AGENTS.md).

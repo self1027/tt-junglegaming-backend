@@ -180,7 +180,7 @@ não afetam publicação. Não use down --volumes no banco do desenvolvedor.
 ```sh
 bun test test/publisher.test.ts
 bun test test/publisher-persistence.test.ts
-bun test test/publisher-sqs.test.ts
+bun test test/publisher-pipeline.test.ts test/publisher-recovery.test.ts
 bun test test/publisher-docker.test.ts
 ```
 

@@ -99,15 +99,15 @@ recuperáveis, fencing e retry sem descarte fecham o caminho Outbox → SQS FIFO
 [Contrato](domain/messaging.md#task-10--publicação-recuperável),
 [operação](outbox-publisher.md), [relatório e resultados](task10-outbox-report.md).
 
-| Critério                                                               | Evidência executável                                                                                                     |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Publicar depois do commit/sem dual write ou transação SQL durante rede | PostgreSQL/SQS reais e observação pg_stat_activity/lock NOWAIT em [publisher-sqs.test.ts](../test/publisher-sqs.test.ts) |
-| Claims exclusivos, leases e fencing de proprietário obsoleto           | [SQL/constraints/EXPLAIN](../test/publisher-persistence.test.ts) e três processos independentes                          |
-| Identidade/precisão/contratos e retry estáveis                         | [Unidade](../test/publisher.test.ts), HTTP/consumer → Outbox → SQS, quatro eventos e replay financeiro                   |
-| Crash antes/durante/depois do envio, SQL incerto                       | SIGKILL, barreiras de portas reais, proxy retendo resposta SQS, PostgreSQL/SQS indisponíveis                             |
-| SIGTERM/drenagem/prazo e reinício                                      | [Imagem Docker e sinais reais](../test/publisher-docker.test.ts)                                                         |
-| Ordenação e deduplicação declaradas                                    | Grupo walletId e dedup eventId verificados no broker; sem promessa de ordem de commit ou exactly-once                    |
-| Arquitetura preservada                                                 | [Testes negativos](../test/architecture.test.ts), lint/Dependency Cruiser, sem AWS em domínio ou Platform → módulos      |
+| Critério                                                               | Evidência executável                                                                                                               |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Publicar depois do commit/sem dual write ou transação SQL durante rede | PostgreSQL/SQS reais e observação pg_stat_activity/lock NOWAIT em [publisher-pipeline.test.ts](../test/publisher-pipeline.test.ts) |
+| Claims exclusivos, leases e fencing de proprietário obsoleto           | [SQL/constraints/EXPLAIN](../test/publisher-persistence.test.ts) e três processos independentes                                    |
+| Identidade/precisão/contratos e retry estáveis                         | [Unidade](../test/publisher.test.ts), HTTP/consumer → Outbox → SQS, quatro eventos e replay financeiro                             |
+| Crash antes/durante/depois do envio, SQL incerto                       | SIGKILL, barreiras de portas reais, proxy retendo resposta SQS, PostgreSQL/SQS indisponíveis                                       |
+| SIGTERM/drenagem/prazo e reinício                                      | [Imagem Docker e sinais reais](../test/publisher-docker.test.ts)                                                                   |
+| Ordenação e deduplicação declaradas                                    | Grupo walletId e dedup eventId verificados no broker; sem promessa de ordem de commit ou exactly-once                              |
+| Arquitetura preservada                                                 | [Testes negativos](../test/architecture.test.ts), lint/Dependency Cruiser, sem AWS em domínio ou Platform → módulos                |
 
 Worker de referências, processamento posterior de PENDING_REFERENCE/TTL e métricas
 agregadas continuam pendentes. Histórico de Tasks anteriores registra a cobertura

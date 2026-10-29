@@ -128,7 +128,7 @@ claims confirmados, sem incremento em consultas. Sem DELETE ou estado terminal.
 [Contrato e política](domain/messaging.md#task-10--publicação-recuperável).
 
 Testes reais: [persistência/EXPLAIN/migrations](../test/publisher-persistence.test.ts),
-[três processos e falhas SQL/SQS](../test/publisher-sqs.test.ts),
+[três processos](../test/publisher-pipeline.test.ts) e [falhas SQL/SQS](../test/publisher-recovery.test.ts),
 [Docker/SIGTERM](../test/publisher-docker.test.ts). Não alteram wallet, ledger,
 idempotência ou Inbox. Fonte de resultados: [relatório](task10-outbox-report.md).
 
