@@ -62,7 +62,11 @@ src/
 test/                           # integração e fronteiras
 ```
 
-Pastas vazias são preservadas por `.gitkeep`. Persistência técnica das seis tabelas, núcleo financeiro (Money, Wallet e WalletLedgerEntry), portas, mappers, adapters e UnitOfWork estão implementados. APIs, invariantes e factory de abertura versão 1 estão em [Financial](docs/domain/financial.md); contrato transacional/locks em [persistência](docs/persistence.md#integração-financeira-e-unitofwork). Casos de uso, endpoints financeiros, apostas, processamento de mensagens e workers continuam futuros.
+Pastas vazias são preservadas por `.gitkeep`. Persistência das seis tabelas, núcleo Financial, domínio Wagering, portas, mappers, adapters, UnitOfWork e ProcessWagerUseCase estão implementados. APIs financeiras e abertura versão 1 estão em [Financial](docs/domain/financial.md); processamento, entrada/saída, hash, replay e políticas em [Wagering](docs/domain/wagering.md). Endpoints financeiros, processamento de mensagens e workers continuam futuros. A composição `createProcessWagerUseCase(orm)` fica em `src/bootstrap/wagering.ts`.
+
+Task 06: `bun test test/process-wager.test.ts test/wagering-persistence.test.ts test/process-wager-persistence.test.ts` cobre unidade, adapters e processamento PostgreSQL, inclusive três processos Bun, 50 duplicatas e recuperação antes/depois do commit. [Evidências e limitações](docs/persistence.md#task-06--processamento-atômico). A migration adicional reforça a unicidade de reversões diretas; `db:rollback` remove somente a última migration. Rollback integral até a fundação continua recusando ledger confirmado.
+
+Task 07: `bun test test/wager-events.test.ts test/process-wager.test.ts test/process-wager-persistence.test.ts` valida quatro eventos v1 e inserção na Outbox existente, atomicamente com efeitos e idempotência. Replay não gera eventos. Inclui falhas SQL, precisão JSONB, 50 duplicatas em três processos e leitura durável após crash. [Contrato e matriz](docs/domain/messaging.md#task-07--protocolo-v1-implementado), [relatório e validações](docs/task07-outbox-report.md). Nenhum publisher/SQS/worker foi implementado; os registros permanecem PENDING e não foram publicados. Nenhuma migration nova nesta tarefa.
 
 Integração dos adapters: `bun test test/financial-persistence.test.ts`. Usa outro PostgreSQL descartável e testa precisão, ledger, commit/rollback, contextos/pool e locks com três processos Bun independentes. Não substitui os cenários futuros de idempotência, SQS ou recuperação de workers.
 

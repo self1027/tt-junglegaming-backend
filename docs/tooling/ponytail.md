@@ -14,7 +14,15 @@ codex plugin list --marketplace ponytail --json
 
 A instalação é local a cada máquina. O último comando deve informar installed/enabled e a versão do plugin. Reinstalações e upgrades devem conferir a versão efetivamente resolvida; a dependência não pertence ao bun.lock.
 
-Os hooks usam Node.js no PATH (verificado nesta instalação: v24.13.0). Abra `/hooks` no Codex para revisar e confiar nos hooks do plugin, conforme INSTALL.md; depois inicie uma nova conversa. No aplicativo desktop, reinicie o Codex para carregar a instalação. A instalação e descoberta das skills não significam que os hooks já foram autorizados ou executados.
+Os hooks usam Node.js no PATH (verificado na recuperação: v22.23.3). Abra `/hooks` no Codex para revisar e confiar nos hooks do plugin, conforme INSTALL.md; depois inicie uma nova conversa. No aplicativo desktop, reinicie o Codex para carregar a instalação. A instalação e descoberta das skills não significam que os hooks já foram autorizados ou executados automaticamente.
+
+## Recuperação verificada — 2026-10-28
+
+Antes da recuperação, as seis skills locais estavam disponíveis, mas `codex plugin list --json` não listava Ponytail. A afirmação de instalação neste guia não correspondia ao estado daquela sessão.
+
+Os comandos acima foram executados novamente pelo gerenciador nativo. `codex plugin list --marketplace ponytail --json` confirmou `ponytail@ponytail`, versão **5.3.2**, `installed: true` e `enabled: true`. Manifesto/skills instalados em `~/.codex/plugins/cache/ponytail/ponytail/5.3.2`. A revisão pinada do marketplace corresponde à inspecionada acima; confira sempre a versão resolvida do plugin após upgrades.
+
+O manifesto instalado declara três eventos: SessionStart, UserPromptSubmit e SubagentStart. Os três scripts foram inspecionados e executados com diretório de estado temporário, em formato Codex: todos retornaram contexto JSON do evento correspondente e estado `full`. Esse smoke test confirma compatibilidade dos scripts com Node, sem alegar que o aplicativo em execução já os carregou. Skills locais preexistentes e AGENTS do projeto foram preservados; nenhum registro de confiança dos hooks foi alterado automaticamente. Para ativação nas novas sessões, reinicie o aplicativo e revise/confie nos hooks em `/hooks` conforme o fluxo oficial.
 
 O padrão upstream é full. A interface de Claude Code chamada band não é um recurso instalado no aplicativo por esta integração.
 

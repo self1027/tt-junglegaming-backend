@@ -2,7 +2,7 @@
 
 Decisão e ambiguidades: [ARCHITECTURE.md](../ARCHITECTURE.md#fundação-de-persistência--decisão-aprovada-nesta-tarefa). Requisitos: §§4–6, 7.1, 9–11 e 13 do [enunciado imutável](challenge.md), [Financial](domain/financial.md), [Wagering](domain/wagering.md) e [Messaging](domain/messaging.md).
 
-Entregue: armazenamento, integridade estrutural e [integração financeira transacional](#integração-financeira-e-unitofwork) com portas, mappers e adapters. Os modelos não são entidades de domínio. Não há caso de uso de processamento financeiro, consumer, publisher ou algoritmo de idempotência.
+Entregue: armazenamento, integridade estrutural, [integração financeira transacional](#integração-financeira-e-unitofwork), [processamento atômico da Task 06](#task-06--processamento-atômico) e [inserção Outbox da Task 07](#task-07--outbox-transacional). Os modelos não são entidades de domínio. Consumer, publisher, Inbox e workers não estão implementados.
 
 ## Versões e execução
 
@@ -16,7 +16,7 @@ Setup e comandos estão no [README](../README.md). `db:status` mostra migrations
 
 ## Convenções físicas
 
-`id` é UUID PK com default `gen_random_uuid()` em todas as seis tabelas. IDs de player/provider/round/game/message e chaves externas são TEXT, sem impor UUID aos identificadores externos. Todas as datas são TIMESTAMPTZ. `created_at`, `updated_at`, `received_at` e `next_attempt_at` da Outbox têm default `current_timestamp` quando presentes. `updated_at` deve ser informado pelo futuro adapter ao alterar o registro; não há hook que esconda uma decisão de aplicação.
+`id` é UUID PK com default `gen_random_uuid()` em todas as seis tabelas. IDs de player/provider/round/game/message e chaves externas são TEXT, sem impor UUID aos identificadores externos. Todas as datas são TIMESTAMPTZ. `created_at`, `updated_at`, `received_at` e `next_attempt_at` da Outbox têm default `current_timestamp` quando presentes. Adapters informam `updated_at` explicitamente ao alterar registros; não há hook que esconda uma decisão de aplicação.
 
 `money` na tabela abaixo significa **NUMERIC sem typmod**, NOT NULL, finito, não negativo e `scale(value) = 2`. O banco rejeita `1.001`, `1`, NaN e infinitos, sem arredondar; gravar `1.00`. Isso mantém escala exata sem escolher um teto comercial ausente do contrato. O limite técnico permanece o do PostgreSQL. Validação lexical da string também existe no tipo técnico ORM; Money e catálogo ISO-4217 pertencem ao [domínio Financial](domain/financial.md).
 
@@ -44,7 +44,7 @@ Além das PKs, NOT NULL e checks monetários:
 | Ledger             | `ledger_transaction_wallet_unique(transaction_id,wallet_id)`; direction DEBIT/CREDIT; `balance_before ± amount = balance_after`. Trigger `ledger_append_only` bloqueia UPDATE, DELETE e TRUNCATE, inclusive acesso SQL direto.                                                                                                                                                                                                                               |
 | Inbox              | `inbox_consumer_message_unique(consumer_name,message_id)`; attempts >= 0; status RECEIVED/PROCESSED e equivalência entre PROCESSED e processed_at preenchido.                                                                                                                                                                                                                                                                                                |
 | Outbox             | `outbox_event_id_unique(event_id)`; event_version >= 1, attempts >= 0, payload objeto JSONB; estados PENDING/PUBLISHED e equivalência entre PUBLISHED e published_at preenchido. Trigger `outbox_stable_event_id` bloqueia alteração do event_id, sem bloquear tentativas/publicação.                                                                                                                                                                        |
-| Idempotency        | `idempotency_scope_key_unique(scope,idempotency_key)`; estados IN_PROGRESS/COMPLETED; COMPLETED exige transação e original_result objeto JSONB. Resultado é snapshot persistido, independente do saldo atual. Algoritmo do hash e momento de completar continuam pendentes.                                                                                                                                                                                  |
+| Idempotency        | `idempotency_scope_key_unique(scope,idempotency_key)`; estados IN_PROGRESS/COMPLETED; COMPLETED exige transação e original_result objeto JSONB. Resultado é snapshot persistido, independente do saldo atual. Hash e conclusão seguem o contrato Wagering da Task 06.                                                                                                                                                                                        |
 
 Todas as FKs usam `ON DELETE RESTRICT ON UPDATE RESTRICT`, sem cascata destrutiva:
 
@@ -62,17 +62,18 @@ Outbox aggregate_id é polimórfico (wallet ou transação), portanto não receb
 
 As PKs e constraints UNIQUE acima criam índices B-tree. Índices adicionais:
 
-| Nome                              | Colunas / predicado                                                                                   |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `wager_wallet_history_idx`        | `(wallet_id,created_at,id)`                                                                           |
-| `wager_reference_idx`             | `(reference_transaction_id)`                                                                          |
-| `wager_pending_reference_idx`     | `(next_attempt_at,created_at,id) WHERE status = 'PENDING_REFERENCE'`                                  |
-| `wager_processed_reversal_unique` | UNIQUE `(reference_transaction_id,kind) WHERE status = 'PROCESSED' AND kind IN ('REFUND','ROLLBACK')` |
-| `ledger_wallet_history_idx`       | `(wallet_id,created_at,id)`                                                                           |
-| `outbox_pending_due_idx`          | `(next_attempt_at,created_at,id) WHERE status = 'PENDING'`                                            |
-| `idempotency_transaction_idx`     | `(transaction_id)`                                                                                    |
+| Nome                                     | Colunas / predicado                                                                                   |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `wager_wallet_history_idx`               | `(wallet_id,created_at,id)`                                                                           |
+| `wager_reference_idx`                    | `(reference_transaction_id)`                                                                          |
+| `wager_pending_reference_idx`            | `(next_attempt_at,created_at,id) WHERE status = 'PENDING_REFERENCE'`                                  |
+| `wager_processed_reversal_unique`        | UNIQUE `(reference_transaction_id,kind) WHERE status = 'PROCESSED' AND kind IN ('REFUND','ROLLBACK')` |
+| `wager_processed_direct_reversal_unique` | UNIQUE `(reference_transaction_id) WHERE status = 'PROCESSED' AND kind IN ('REFUND','ROLLBACK')`      |
+| `ledger_wallet_history_idx`              | `(wallet_id,created_at,id)`                                                                           |
+| `outbox_pending_due_idx`                 | `(next_attempt_at,created_at,id) WHERE status = 'PENDING'`                                            |
+| `idempotency_transaction_idx`            | `(transaction_id)`                                                                                    |
 
-A unicidade de reversão protege sucesso por tipo; tentativas rejeitadas continuam auditáveis e REFUND não bloqueia automaticamente um ROLLBACK. O schema não decide a interação financeira dessas operações. O futuro processador deve agendar next_attempt_at, classificar falhas e coordenar aquisição concorrente; não há leases ou limites de tentativas escolhidos nesta etapa.
+A unicidade de reversão protege sucesso por tipo e, desde a Task 06, impede modalidades diretas cumulativas sobre a mesma referência. Tentativas rejeitadas continuam auditáveis. Agendamento de next_attempt_at, leases e limites de tentativas pertencem ao worker futuro.
 
 ## Migration e reversão
 
@@ -92,11 +93,97 @@ O teste de lock mantém `PESSIMISTIC_WRITE` numa wallet e, após confirmar a aqu
 
 `bun test test/api.test.ts` usa outro container isolado e comprova inicialização Nest, HTTP liveness real e fechamento do pool. A suíte normal `bun run test` inclui esses testes e os testes negativos de arquitetura, inclusive rejeição de imports ORM em domínio/aplicação.
 
-Pendências: casos de uso que coordenem os adapters, zero por operação de aposta, transições terminais, referências já existentes mas não processadas, hash canônico/escopo de idempotência, evolução de resultados pendentes, backoff/TTL, claims/leases, publishers concorrentes e crash recovery dos futuros workers. Os testes dos adapters abaixo usam três processos, mas não comprovam o processador completo (§13).
+Pendências atuais: backoff/TTL, claims/leases de workers, atualização condicionada de resultados pendentes pelo worker, publishers concorrentes, Inbox e crash/ACK. As evidências históricas dos adapters abaixo não substituem as do processador completo nas Tasks 06 e 07.
+
+## Task 07 — Outbox transacional
+
+[MikroOrmOutboxRepository](../src/modules/wagering/adapters/persistence/mikro-orm-outbox.repository.ts)
+insere eventos validados usando a mesma TransactionSession do contexto Wagering,
+composto em bootstrap. Reutiliza `outbox_messages`, UNIQUE de event_id, CHECKs,
+trigger de identidade e índice parcial existentes; nenhuma migration nova nem
+alteração nas migrations anteriores.
+
+O JSONB contém o envelope inteiro, com `version` correspondente a `event_version`.
+Status PENDING, attempts 0, created_at e next_attempt_at usam defaults SQL;
+last_error/published_at permanecem nulos. occurred_at vem do fato de negócio.
+aggregate_id é transactionId ou walletId conforme o [protocolo](domain/messaging.md#task-07--protocolo-v1-implementado).
+
+ProcessWagerUseCase insere eventos após Wagering/wallet/ledger e antes do resultado
+idempotente. Falha em qualquer participante reverte todas as inserções/atualizações.
+O adapter não faz commit/flush, transação própria, update, retry, claim ou publicação.
+Portas encerradas rejeitam uso inclusive depois de falha; eventos não são recriados
+em replay. Não há lock global acrescentado.
+
+Testes reais e inventário em [relatório da Task 07](task07-outbox-report.md):
+falha no segundo INSERT da Outbox, erro SQL posterior em idempotência, eventId
+duplicado, precisão acima de 53 bits, nova conexão/processo após commit, três
+processos/50 duplicatas e crash antes/depois do commit. Os cenários financeiros
+reconciliam saldo e ledger e verificam ausência de eventos órfãos pelo walletId
+do payload, inclusive quando a transação de negócio não persistiu.
+
+## Task 06 — processamento atômico
+
+Contrato e políticas são definidos em [Wagering](domain/wagering.md#task-06--políticas-e-contrato-aprovados), sem duplicar aqui regras financeiras. `ProcessWagerUseCase` usa uma única execução do contexto estendido. `MikroOrmIdempotencyRepository` e `MikroOrmWagerTransactionRepository` recebem a mesma TransactionSession dos adapters Financial. Não abrem transação nem fazem commit próprios. Mappers explicitam nulabilidade, Money decimal e reidratação dos cinco estados; metadados de retry ficam fora do domínio. `insertProcessed` permanece compatível.
+
+Ordem de recursos: claim scope/key (INSERT ON CONFLICT e leitura FOR UPDATE quando existente) → advisory transaction lock da tupla de identidade externa → resolução player/moeda e wallet FOR UPDATE → referência/histórico → Wagering → wallet/ledger quando mudam → idempotency COMPLETED → commit. Replay retorna snapshot JSONB sem adquirir wallet nem gravar efeitos. Hash divergente e identidade externa com outra key são erros de aplicação; a reserva desta tentativa é revertida. Nenhuma key confirmada pendente permanece IN_PROGRESS.
+
+`PENDING_REFERENCE` representa ausência, FK nula. Referência existente ainda em processamento mantém a operação em PENDING; resultado JSONB guarda motivo NOT_PROCESSED e ID/status observado. Replays pendentes não reavaliam a referência. Futuro worker deverá localizar ambos os estados, adquirir a coordenação descrita e atualizar atomicamente somente resultado não terminal; essa porta/worker não foi antecipada. `save` não sobrescreve estados terminais e não reseta metadados técnicos.
+
+### Migration adicional
+
+[Migration202610280002](../src/platform/persistence/migrations/Migration202610280002.ts) adiciona `wager_processed_direct_reversal_unique(reference_transaction_id) WHERE status = 'PROCESSED' AND kind IN ('REFUND','ROLLBACK')`. O índice anterior por modalidade permanece. Rejeições não participam do predicado; ROLLBACK de REFUND tem outro ID referenciado. Up falha sobre histórico cumulativo incompatível sem excluir registros; down remove somente o índice, preservando histórico. Rollback integral da fundação continua recusando ledger confirmado; testes usam `--to 0` para verificar essa proteção com as duas migrations.
+
+### Evidências executáveis
+
+Ambiente: Windows/PowerShell, Bun 1.4.4, Docker Engine 29.8.1, PostgreSQL 18.3 real em projetos/volumes descartáveis. Harness existente em [support/postgres.ts](../test/support/postgres.ts), filhos independentes em [wager-process.ts](../test/support/wager-process.ts) com pools próprios de duas conexões. stdin fornece barreiras bufferizadas; sinais JSON registram PIDs. `pg_stat_activity.wait_event_type = 'Lock'` confirma contenção antes da liberação; polling limitado a 5s, sinais com deadline de 10s. Sem sleeps usados como prova de corrida.
+
+- [Unidade](../test/process-wager.test.ts): cinco operações, zero, reversões e cadeias, insuficiências distintas, referências ausente/em processamento/terminal/incompatível, replay histórico, conflitos e propagação de falhas técnicas.
+- [Portas SQL](../test/wagering-persistence.test.ts): cinco estados e precisão acima de 53 bits; reserva/conclusão/rollback; up/down/up do índice com histórico preservado; violação direta da unicidade cruzada; atualização não terminal e recusa de reabertura.
+- [Processador SQL](../test/process-wager-persistence.test.ts): commits completos BET/WIN/LOSS; rejeições/pendências sem efeitos; rollback em falhas SQL de Wagering, wallet, ledger e conclusão idempotente, seguido de retry seguro; replay histórico; conflitos e independência de providers; inversas e cadeias; estados de referência; insuficiência de reversão.
+- Três processos disputando a mesma wallet: três BETs resultam em 70.00, versão 4, três débitos mais OPENING. Wallets distintas confirmam enquanto a terceira mantém lock. Rollback do detentor seguido de duas BETs de 80.00/100.00 resulta em uma PROCESSED, uma REJECTED, saldo 20.00, versão 2 e um débito de 80.00.
+- Mesma key em três processos e 50 submissões distribuídas em três pools: um débito/uma transação/um registro idempotente; 49 replays no lote. Outra key para a mesma identidade externa produz conflito sem nova operação. REFUND/ROLLBACK concorrentes e mesma modalidade duplicada produzem uma única reversão. Original e reversão concorrentes concluem sem inversão de locks nos cenários executados.
+- Processo encerrado antes de commit, com concorrentes comprovadamente esperando SQL: reserva, wallet, ledger e wager são revertidos; outro processo aplica uma vez e o restante faz replay. Processo encerrado após commit e antes de entregar resposta: ambos os concorrentes retornam replay, preservando saldo original. Não há ACK/publicação nessa prova.
+- Ordem inversa: reversão adquire wallet antes da original e confirma PENDING_REFERENCE; a original que aguardava o lock confirma depois. Replay da reversão preserva a resposta pendente original sem executar um worker implícito ou gerar crédito.
+- Em todos os cenários financeiros, reconciliação pelo ledger confere saldo, versão, contagens, valores/direção dos lançamentos e estados/idempotência. Regressão de Unicode confirma que surrogate inválido não pode selecionar a wallet de U+FFFD.
+
+Revisão independente identificou colapso de identidades Unicode pelo driver UTF-8. Regressões foram observadas falhando antes da correção; aplicação agora rejeita surrogates isolados em todos os textos antes do hash/SQL e preserva Unicode válido. Revisor confirmou a correção em unidade e PostgreSQL; nenhum outro defeito acionável encontrado.
+
+Validação final em 2026-10-28:
+
+| Comando / verificação                  | Resultado                                                                                                                     |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `bun run typecheck`                    | Passou                                                                                                                        |
+| `bun run lint`                         | Passou; arquitetura sem violações, 45 módulos e 131 dependências                                                              |
+| `bun run format:check`                 | Passou                                                                                                                        |
+| `bun run test`                         | **248 passaram, 0 falharam, 1772 asserções, 12 arquivos**, incluindo 21 testes de arquitetura positivos/negativos             |
+| Novas suítes da Task 06                | 33 testes isolados, 4 de portas SQL e 32 de processamento SQL/distribuído                                                     |
+| `bun run build`                        | Passou                                                                                                                        |
+| Documentação e integridade do checkout | Links relativos conferidos; `git diff --check` passou; enunciado, migration inicial, dependências e regras strict preservados |
+
+PIDs da execução final, registrados pelos filhos e correlacionados às esperas SQL:
+
+| Cenário               | Processos e resultado                                                                                       |
+| --------------------- | ----------------------------------------------------------------------------------------------------------- |
+| 50 duplicatas         | 3348 segurou commit (1 aplicação/16 replays); 2672 esperou e fez 17 replays; 30504 esperou e fez 16 replays |
+| Rollback e 100/80/80  | 27392 reverteu; 29900 confirmou 80.00; 14492 rejeitou por insuficiência; saldo 20.00/versão 2               |
+| Crash antes do commit | 29704 encerrado no sinal before-commit; 3256 aplicou; 5456 fez replay                                       |
+| Crash após commit     | 13596 encerrado no sinal committed-before-response; 30432 e 30364 fizeram replay                            |
+
+Todos os containers/volumes descartáveis da validação foram encerrados/removidos pelo harness. Nenhuma imagem da aplicação foi reconstruída; build TypeScript e inicialização Nest/HTTP real passaram na suíte. Não foram executados SQS/LocalStack ou testes de publicação, que não pertencem a esta etapa.
+
+Durante a Task 06, Graphify estava indisponível: consultas com símbolos reais falharam com `command not found: graphify` mesmo após incluir `.local/bin` no PATH. Naquela execução o índice não foi atualizado e a exploração usou busca restrita. A [recuperação posterior autorizada](tooling/graphify.md#recuperação-verificada--2026-10-28) instalou o CLI e validou construção, query, explain e path; não altera retroativamente as evidências da Task 06.
+
+### Arquivos da Task 06
+
+Criados: `src/modules/wagering/application/canonical-wager.ts`, `src/modules/wagering/application/process-wager.use-case.ts`, `src/modules/wagering/public/process-wager.ts`, `src/modules/wagering/adapters/persistence/mappers.ts`, `src/modules/wagering/adapters/persistence/mikro-orm-idempotency.repository.ts`, `src/bootstrap/wagering.ts`, `src/platform/persistence/migrations/Migration202610280002.ts`; três suítes `test/process-wager.test.ts`, `test/wagering-persistence.test.ts`, `test/process-wager-persistence.test.ts`; dois helpers `test/support/wager-child.ts`, `test/support/wager-process.ts`; [plano de checkpoints](superpowers/plans/2026-10-28-process-wager.md).
+
+Evoluídos: porta `src/modules/wagering/public/persistence.ts`, exports `public/index.ts`, adapter Wagering existente, composição `src/bootstrap/persistence.ts`, registro de migrations `src/platform/persistence/config.ts`, expectativas de integridade em `test/persistence.test.ts`; este documento, Wagering, referências de Financial, requisitos, arquitetura e README. Domínio Wagering e seus testes preexistentes foram preservados. Nenhuma alteração em dependências, configuração strict, migration inicial ou enunciado.
+
+Limites: nenhuma garantia de entrega exactly-once; sem publicação, ACK, SQS, retry automático, TTL, worker, endpoints ou classificação genérica em FAILED. Testes demonstram os cenários descritos, não ausência universal de deadlocks sob quaisquer clientes SQL que ignorem a ordem contratada.
 
 ## Integração financeira e UnitOfWork
 
-Implementação autorizada pela tarefa Financial Persistence Integration & Transactional UnitOfWork; atende a persistência de §§5, 6.0–6.4, 8–9 e 13 sem antecipar ProcessWagerUseCase. Sem migrations novas nem alterações nas constraints, configuração de conexão ou regras de arquitetura.
+Histórico da tarefa Financial Persistence Integration & Transactional UnitOfWork: entregou a base de §§5, 6.0–6.4, 8–9 e 13 sem antecipar ProcessWagerUseCase. A Task 06 acima evolui as portas e acrescenta uma migration; a integração Financial permanece preservada.
 
 | Contrato / implementação                                                                                                                   | Responsabilidade                                                                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -112,7 +199,7 @@ Implementação autorizada pela tarefa Financial Persistence Integration & Trans
 
 `execute<T>(work: (context) => Promise<T>): Promise<T>` abre uma transação READ COMMITTED, entrega o contexto e só resolve após commit. Rejeição do callback ou erro SQL não tratado causa rollback e propaga o erro original. Colaboradores devem receber o contexto e aguardar todas as operações; uma nova chamada a `execute` é outra transação, inclusive dentro de um callback. Não compartilhar instâncias de domínio entre execuções, usar repositórios depois do callback ou capturar falha SQL para continuar uma transação abortada. Não há retries automáticos. Comportamento transacional segue a [API oficial MikroORM](https://mikro-orm.io/docs/transactions), exercitada na versão instalada.
 
-As escritas são parametrizadas pelo ORM, executadas imediatamente no EntityManager transacional. Nenhum repositório abre transação ou faz commit/flush independente. Uma falha de FK/UNIQUE/CHECK mantém código PostgreSQL reconhecível pelo chamador. O contexto mínimo não contém Inbox, Outbox ou idempotência: serão acrescentados quando seus fluxos forem implementados.
+As escritas são parametrizadas pelo ORM, executadas imediatamente no EntityManager transacional. Nenhum repositório abre transação ou faz commit/flush independente. Uma falha de FK/UNIQUE/CHECK mantém código PostgreSQL reconhecível pelo chamador. O contexto atual contém idempotência, Wagering e Outbox; Inbox permanece futura.
 
 Ordem de criação: **wallet → transação financeira → ledger**, por causa das FKs imediatas. Em wallet existente, adquirir lock antes de qualquer cálculo sobre saldo; atualizar wallet e inserir a transação antes de inserir o ledger. Erro posterior reverte todos os efeitos. Os testes também escrevem transação/ledger antes de uma atualização que falha, para comprovar rollback dessa ordem. UnitOfWork garante a fronteira atômica, não exige efeitos de negócio: cabe ao futuro coordenador associar cada BalanceChange ao registro e ledger corretos.
 

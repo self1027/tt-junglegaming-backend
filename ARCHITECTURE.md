@@ -4,14 +4,14 @@
 
 O [enunciado](docs/challenge.md) é a fonte imutável dos requisitos. O [índice de requisitos](docs/requirements.md) aponta seus contratos e critérios. Aqui ficam decisões estruturais; regras financeiras, operações e transporte ficam em [docs/domain](docs/domain/). **Aprovada** significa determinada pela tarefa de arquitetura/bootstrap; **obrigatória** vem do enunciado; **pendente/proposta** não autoriza implementação como contrato fechado.
 
-Implementado: API NestJS em [src/main.api.ts](src/main.api.ts), composição em [src/bootstrap](src/bootstrap/), `GET /health/live`, fundação PostgreSQL/MikroORM, núcleo de domínio [Financial](docs/domain/financial.md) e [integração financeira transacional](docs/persistence.md#integração-financeira-e-unitofwork) com portas, mappers, adapters e UnitOfWork. Não há domínio de apostas, casos de uso financeiros, processamento Inbox/Outbox, SQS, consumer, worker, readiness ou reconciliação. Dockerfile preservado; [compose.yaml](compose.yaml) oferece PostgreSQL.
+Implementado: API NestJS em [src/main.api.ts](src/main.api.ts), composição em [src/bootstrap](src/bootstrap/), `GET /health/live`, fundação PostgreSQL/MikroORM, domínio [Financial](docs/domain/financial.md), domínio [Wagering](docs/domain/wagering.md) e ProcessWagerUseCase com idempotência persistente, processamento financeiro atômico e eventos tipados na Outbox. Não há endpoints financeiros, Inbox, publicação, SQS, consumer, worker, readiness ou reconciliação. Dockerfile preservado; [compose.yaml](compose.yaml) oferece PostgreSQL.
 
 ## Decisões aprovadas
 
 - Monólito modular hexagonal, com processos escaláveis separadamente. NestJS, TypeScript strict, Bun 1.x, ESLint strict type-aware e Prettier com tabs/largura 4. Versões executáveis pertencem ao [package.json](package.json).
 - Contexto segue a separação do material `../sam/`, capítulos 04–06: orientação como índice, contratos por domínio, procedimentos com entradas/etapas/evidências e validação proporcional. Exemplos didáticos daquele material não adicionam requisitos financeiros. As instruções operacionais são autossuficientes neste repositório.
 - Graphify é o índice derivado de navegação do código, consultado antes de exploração ampla. Extração estrutural local (AST e títulos/links de documentos), sem LLM, e leitura dirigida das fontes preservam a autoridade do enunciado e dos contratos; o grafo não comprova invariantes. Setup, cobertura e atualização pertencem a [docs/tooling/graphify.md](docs/tooling/graphify.md).
-- Distribuição de responsabilidades e dependências abaixo; fronteira transacional coordenada pela futura aplicação de Wagering. O contrato mínimo de persistência está implementado e será ampliado somente conforme novos participantes forem entregues.
+- Distribuição de responsabilidades e dependências abaixo; fronteira transacional coordenada pela aplicação de Wagering. O contexto inclui os participantes entregues, inclusive Outbox desde a Task 07, sem antecipar Inbox.
 
 | Escopo                              | Responsabilidade planejada                                     |
 | ----------------------------------- | -------------------------------------------------------------- |
@@ -26,9 +26,26 @@ As regras atuais em [.dependency-cruiser.cjs](.dependency-cruiser.cjs) e [eslint
 
 ## Unidade transacional
 
-O futuro `ProcessWagerUseCase`, em application de Wagering, coordenará o processamento completo pela porta `UnitOfWork`. O contexto recebido oferece repositórios associados **à mesma transação**, sem tipos do ORM nos contratos internos. O contrato financeiro é público; Wagering estende o contexto com sua porta técnica de transações. Financial não conhece essa extensão.
+`ProcessWagerUseCase`, em application de Wagering, coordena o processamento pela porta `UnitOfWork`. O contexto oferece repositórios associados **à mesma transação**, sem tipos do ORM nos contratos internos. Wagering estende o contexto financeiro público com WagerTransactionRepository e IdempotencyRepository. Financial não conhece essa extensão. [bootstrap/wagering.ts](src/bootstrap/wagering.ts) compõe o caso de uso sem lógica financeira e sem endpoints novos.
 
-Conforme aplicável à entrada/operação, a unidade atômica deverá abranger validação e persistência de idempotência, WagerTransaction, alteração de saldo, ledger, Inbox SQS e eventos na Outbox. A implementação da unidade de trabalho faz commit/rollback; a aplicação financeira participa do contexto recebido e **não abre transação independente**. Nesta etapa, wallet, transação e ledger já compartilham a mesma transação; Inbox/Outbox/idempotência ainda não têm portas no contexto.
+Na Task 06, a unidade atômica passou a abranger reserva/conclusão idempotente, WagerTransaction, wallet e ledger quando há mudança. A Task 07 inclui Outbox antes da conclusão idempotente. Uma única chamada a execute, sem retry interno; resposta somente após commit. A aplicação financeira participa do contexto recebido e **não abre transação independente**. Inbox deverá participar futuramente da mesma unidade.
+
+### Task 07 — eventos e intenção durável
+
+Contratos públicos de eventos Wagering e WalletBalanceChanged pertencem a Wagering,
+que coordena os fatos confirmados. IntegrationEvent abstrato e quatro subclasses
+v1 sem infraestrutura formam a união discriminada. A porta Outbox pertence ao
+mesmo contrato público; o adapter do módulo usa somente a sessão e o modelo técnico
+de Platform. Essa localização segue as fronteiras existentes sem Platform importar
+negócios e sem exceções novas em ESLint/Dependency Cruiser. Financial permanece
+independente de Wagering. [Protocolo e matriz](docs/domain/messaging.md#task-07--protocolo-v1-implementado).
+
+Bootstrap compõe MikroOrmOutboxRepository com a mesma TransactionSession dos demais
+adapters. Cada INSERT é imediato; o envelope completo vai no JSONB existente.
+Nenhuma segunda Outbox ou migration foi necessária. Append falha junto com toda
+a unidade financeira; replay retorna antes de construir eventos. Não há lock novo,
+commit local ou publicação. Identidade, correlação, causação e evolução ficam no
+contrato Messaging; [evidências de durabilidade e concorrência](docs/task07-outbox-report.md).
 
 Abertura de wallet terá caso de uso e fronteira próprios, independentes de `ProcessWagerUseCase`; wallet, `OPENING` e crédito de abertura são atômicos quando há saldo inicial positivo (§9). `Wallet.open` preserva versão 1; a porta/adaptação de OPENING pertence a Financial e usa a tabela técnica compartilhada, sem importar Wagering. O fluxo é demonstrado pela integração, sem antecipar endpoint/caso de uso.
 
@@ -37,6 +54,14 @@ Abertura de wallet terá caso de uso e fronteira próprios, independentes de `Pr
 §§5, 6.2 e 8 do [enunciado](docs/challenge.md): coordenação por `walletId`, sem lock global, saldo não negativo, nenhuma atualização perdida, wallets diferentes em paralelo e correção com pelo menos três instâncias. A integração escolhe `SELECT … FOR UPDATE` por registro, isolamento READ COMMITTED e atualização condicionada à versão lida sob lock como proteção adicional. O lock é mantido até commit/rollback. Wallets múltiplas devem ser adquiridas em ordem crescente dos UUIDs canônicos. Não há retries automáticos; falhas de lock/deadlock são propagadas e a política futura permanece pendente.
 
 Duplicatas concorrentes e reversões exigem unicidade/integridade no PostgreSQL. Schema deve garantir unicidade, imutabilidade e não-negatividade exigidas, além da coordenação da aplicação; FIFO é otimização. Casos e resultado obrigatório estão no [plano de aceitação](docs/requirements.md), sem presumir que versionamento já escolheu optimistic locking.
+
+### Task 06 — coordenação entregue
+
+Ordem: reserva scope/key → advisory lock transacional de identidade externa → wallet FOR UPDATE → referência/histórico → Wagering → wallet/ledger → resultado idempotente → commit. Nenhuma referência exige adquirir outra wallet ou identidade externa; referência incompatível é rejeitada. Isso evita aquisição circular entre original/reversão e mantém wallets distintas paralelas. READ COMMITTED/refresh observa o estado confirmado após a espera. Falhas de lock/conexão/deadlock propagam e revertem; não viram FAILED automaticamente.
+
+`INSERT ON CONFLICT DO NOTHING` reserva scope/key e espera o concorrente; leitura posterior sob lock compara hash e recupera snapshot. Uma reserva não confirmada desaparece no rollback/crash. Advisory usa hash PostgreSQL de tupla JSON com namespace, nunca lock global; colisão só aumenta contenção. UNIQUE(provider,external) reforça a identidade externa; outra key produz conflito de aplicação. [Migration202610280002](src/platform/persistence/migrations/Migration202610280002.ts) adiciona unicidade parcial de reversões PROCESSED por referência, sem impedir rejeições auditáveis. Dados cumulativos legados incompatíveis abortam a criação do índice; não são apagados.
+
+Canonicalização, scope, zero, referências pendentes, failure codes e política conservadora de reversões são decisões locais aprovadas da Task 06, documentadas em [Wagering](docs/domain/wagering.md#task-06--políticas-e-contrato-aprovados). Resultado pendente confirmado também é COMPLETED na idempotência; replays não processam novamente. Futuro worker precisará atualizar somente resultado não terminal sob a mesma coordenação; PROCESSED mantém saldo histórico. Testes/evidências em [persistência](docs/persistence.md#task-06--processamento-atômico). Não se anuncia exactly-once delivery.
 
 ## Processos planejados
 
@@ -52,7 +77,7 @@ Outbox Publisher publica eventos; Pending Reference Processor reprocessa referê
 
 SQS FIFO de entrada, Inbox persistente e Outbox transacional são obrigatórios (§§6.5, 10–11). ACK somente depois do commit; publicação assíncrona por worker depois do commit. Entrega at-least-once permite republicação com identificador estável do evento; consumidores precisam tolerar duplicatas. Falha após commit não perde evento; outra instância recupera o trabalho. DLQ, backoff, tentativas limitadas e recuperação pertencem ao contrato de [Messaging](docs/domain/messaging.md).
 
-Idempotência de negócio identifica operação e payload e preserva resultado original; deduplicação de mensagem usa `(consumerName, messageId)`. Uma não substitui a outra. Coordenação exata entre claims, locks e registros Inbox/Outbox está pendente; não se promete exactly-once.
+Idempotência de negócio identifica operação e payload e preserva resultado original; deduplicação de mensagem usará `(consumerName, messageId)`. Uma não substitui a outra. A coordenação de negócio e inserção Outbox estão entregues; Inbox e protocolo de publicação permanecem pendentes.
 
 ## Requisitos obrigatórios e extensões opcionais
 
@@ -66,21 +91,21 @@ Partidas dobradas, OpenTelemetry, dashboard e teste de carga são opcionais, nã
 
 Nenhuma alternativa abaixo está aprovada. Registre decisão, justificativa, consequências e validação quando resolvida; divergências com o enunciado devem continuar visíveis.
 
-| Tema                 | Em aberto / restrição conhecida                                                                                      |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Locks                | Política futura de timeout/retries e tratamento dos conflitos/deadlocks propagados                                   |
-| Unidade de trabalho  | Ampliação do contexto mínimo para Inbox/Outbox/idempotência, conforme sua implementação                              |
-| OPENING              | Caso de uso e endpoint; infraestrutura e factory versão 1 já disponíveis                                             |
-| Idempotência         | Algoritmo do hash canônico, campos de negócio, escopo de unicidade e armazenamento do resultado original             |
-| Inbox/Outbox         | Coordenação de claims, unicidade, publishers concorrentes e recuperação de publicação incerta                        |
-| Retries/referências  | Backoff exponencial obrigatório para referências; parâmetros/limites, aquisição concorrente e classificação de erros |
-| TTL de referências   | Definir tentativas ou TTL e justificar; esgotamento rejeita e emite evento                                           |
-| Filas de eventos     | Destinos, configuração FIFO/deduplicação, retenção e recuperação; entrada/DLQ já têm nomes no contrato               |
-| Contratos externos   | Taxonomia de failureCode, status HTTP e validações não especificadas, sem inventar códigos                           |
-| Estados/ambiguidades | Matriz definitiva de transições e pontos sem definição em [Wagering](docs/domain/wagering.md)                        |
-| Autenticação         | Implementar IdP ou omitir com desenho/ponto de extensão explícito                                                    |
+| Tema                | Em aberto / restrição conhecida                                                                                      |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Locks               | Política futura de timeout/retries e tratamento dos conflitos/deadlocks propagados                                   |
+| Unidade de trabalho | Ampliação futura para Inbox; inserção Outbox entregue na Task 07                                                     |
+| OPENING             | Caso de uso e endpoint; infraestrutura e factory versão 1 já disponíveis                                             |
+| Idempotência        | Atualização condicionada de resultado não terminal pelo futuro worker; hash/scope/replay já definidos na Task 06     |
+| Inbox/Outbox        | Coordenação de claims, unicidade, publishers concorrentes e recuperação de publicação incerta                        |
+| Retries/referências | Backoff exponencial obrigatório para referências; parâmetros/limites, aquisição concorrente e classificação de erros |
+| TTL de referências  | Definir tentativas ou TTL e justificar; esgotamento rejeita e emite evento                                           |
+| Filas de eventos    | Destinos, configuração FIFO/deduplicação, retenção e recuperação; entrada/DLQ já têm nomes no contrato               |
+| Contratos externos  | Status HTTP e integração com transportes; failure codes de negócio definidos na Task 06                              |
+| Falhas permanentes  | Classificação explícita para FAILED e coordenação com DLQ; falhas transitórias propagam rollback                     |
+| Autenticação        | Implementar IdP ou omitir com desenho/ponto de extensão explícito                                                    |
 
-Locks dos adapters são exercitados em três processos independentes; a aceitação distribuída do processador completo continua futura. Nenhum prazo, limite comercial de dinheiro ou política financeira adicional foi definido aqui.
+Locks dos adapters e processamento financeiro completo são exercitados em três processos independentes na Task 06; aceitação de mensageria/publicação continua futura. Não há prazo ou limite comercial de dinheiro definido.
 
 ## Núcleo financeiro — decisão autorizada pela tarefa Financial Domain Core
 
@@ -88,11 +113,11 @@ Money usa `bigint` em unidades de 1/100: aritmética exata sem dependência exte
 
 Wallet protege saldo/versão/datas em campos privados; Money, ledger e movimentação são congelados em execução. Datas entram como cópias e saem como cópias. Factories validam estado estrutural; reidratação não aplica transições. IDs internos seguem UUID do schema, playerId permanece texto e versão respeita INTEGER SQL (máximo 2147483647), sem impor teto monetário.
 
-`Wallet.create` permanece somente a zero; crédito/débito retornam a descrição imutável da mudança, ou `undefined` para zero sem efeitos. Ledger exige movimento positivo e valida a equação e moedas. A futura aplicação vinculará transactionId e persistirá tudo na mesma transação, com coordenação por wallet. A tarefa de integração acrescenta `Wallet.open`, com [proposta prévia](docs/financial-persistence-proposal.md), preservando as factories existentes e permitindo abertura positiva com versão 1 sem crédito comum.
+`Wallet.create` permanece somente a zero; crédito/débito retornam a descrição imutável da mudança, ou `undefined` para zero sem efeitos. Ledger exige movimento positivo e valida a equação e moedas. ProcessWagerUseCase vincula transactionId e persiste tudo na mesma transação, com coordenação por wallet. A tarefa de integração acrescentou `Wallet.open`, com [proposta prévia](docs/financial-persistence-proposal.md), preservando as factories existentes e permitindo abertura positiva com versão 1 sem crédito comum.
 
 ## Integração financeira — decisão autorizada pela tarefa Financial Persistence Integration
 
-Portas públicas pertencem a cada módulo. O contexto mínimo `FinancialTransactionContext` contém wallet, ledger e OPENING; `UnitOfWork<Context>` permite a Wagering acrescentar sua própria porta sem inversão de dependência. A genericidade limita-se ao contexto e resultado do callback; não há CRUD genérico. A porta técnica de Wagering insere registros já processados, com contexto externo real; não valida nem processa operações, estados ou replay.
+Portas públicas pertencem a cada módulo. `FinancialTransactionContext` contém wallet, ledger e OPENING; `UnitOfWork<Context>` permite a extensão Wagering sem inversão de dependência. A genericidade limita-se ao contexto e resultado do callback; não há CRUD genérico. A inserção técnica de registros já processados permanece compatível; a Task 06 acrescenta portas completas de entidades e idempotência, sem mover regras para adapters.
 
 Platform oferece `MikroOrmUnitOfWork` e a sessão técnica, sem importar módulos. [Bootstrap](src/bootstrap/persistence.ts) compõe os adapters em cada execução e registra `UNIT_OF_WORK` no Nest. Cada execução usa fork limpo e transação independente; colaboradores de uma mesma operação devem receber o contexto, nunca chamar `execute` novamente. O callback resolve somente depois do commit; erros não tratados provocam rollback e são propagados. Sessões encerradas rejeitam uso posterior dos repositórios.
 
@@ -119,4 +144,4 @@ Decisões tomadas **antes da migration inicial**:
 | Idempotência           | scope/key únicos; payload_hash opaco (algoritmo pendente); estados técnicos IN_PROGRESS/COMPLETED. JSONB original_result guarda a resposta original completa, inclusive saldo histórico e metadados de resposta quando definidos. COMPLETED exige resultado e transação; FK nullable permite reserva ainda sem transação. Não decide quando completar resultado pendente/rejeitado/falho e não implementa hash/replay.                                                                                                                                         |
 | Reversão               | down remove estruturas em ordem inversa e recusa execução se o ledger contiver lançamentos; teste usa banco descartável sem ledger confirmado. Não é procedimento para apagar histórico em produção. Com dados financeiros, adotar migration corretiva forward e backup.                                                                                                                                                                                                                                                                                       |
 
-O [schema físico e a matriz de integridade](docs/persistence.md) documentam colunas, índices e limites. As políticas de zero, terminalidade, referências ainda não processadas, canonicalização/hash, replay e retries descritas nos contratos permanecem pendentes; a fundação não as resolve silenciosamente.
+O [schema físico e a matriz de integridade](docs/persistence.md) documentam colunas, índices e limites. A tabela acima registra o desenho da fundação original; as políticas entregues posteriormente estão na seção Task 06 e no contrato Wagering. Retries agendados, TTL e mensageria permanecem futuros.
