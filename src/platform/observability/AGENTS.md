@@ -4,7 +4,7 @@ Escopo: logs, métricas e health técnicos. Contratos explícitos: §§9 e 12, i
 
 - Preserve logs JSON estruturados e correlação das operações, sem segredos, dados sensíveis ou payload financeiro completo.
 - Preserve métricas obrigatórias e sinalização de divergência; não esconda falhas para produzir status saudável.
-- Separe liveness de readiness; health é aberto. Liveness não consulta dependências. Readiness verifica PostgreSQL, mas permanece 503 enquanto SQS não estiver configurado; não anuncie readiness completo nesta etapa.
+- Separe liveness de readiness; health é aberto. Liveness não consulta dependências. Readiness verifica PostgreSQL e SQS/FIFO/redrive/DLQ sem consumir; SQS ausente/indisponível retorna 503, dependências saudáveis retornam 200. Consumer usa diagnósticos de processo, sem listener HTTP.
 - Controllers adaptam protocolo e delegam; não contenham regras de negócio. Platform não importa módulos.
 - Para investigação use [operational-diagnosis](../../../.agents/skills/operational-diagnosis/SKILL.md); registre hipóteses e evidências, sem ajustar saldo ou reenviar operação silenciosamente.
 

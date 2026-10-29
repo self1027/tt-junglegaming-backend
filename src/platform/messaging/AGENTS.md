@@ -8,4 +8,4 @@ Escopo: transporte e mecanismos técnicos de mensageria. Contrato: [messaging.md
 - Mantenha recuperação, retry/DLQ e shutdown verificáveis; não confunda deduplicação de mensagem com idempotência de negócio.
 - Use [reliable-messaging](../../../.agents/skills/reliable-messaging/SKILL.md). Consulte [distributed-validation](../../../.agents/skills/distributed-validation/SKILL.md) se precisar comprovar garantias entre processos.
 
-Comprove as janelas de falha afetadas. Não implemente Consumer, Inbox ou Outbox apenas para completar diretórios nesta etapa documental.
+Consumer, Inbox e ACK estão implementados; publisher e worker de referências permanecem futuros. Receba uma mensagem por chamada, com pollers concorrentes limitados, para não gastar tentativas das sucessoras de uma mensagem inválida. Comprove as janelas de falha afetadas. [Operação](../../../docs/sqs-consumer.md).

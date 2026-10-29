@@ -1,6 +1,6 @@
 # Distributed Wagering Processor
 
-Serviço financeiro distribuído da Jungle Gaming. Preserve correção financeira, rastreabilidade e recuperação entre instâncias. O estado atual inclui persistência, domínios Financial/Wagering, ProcessWagerUseCase, Outbox transacional e API HTTP com abertura/consultas/reconciliação por snapshot; componentes planejados não são funcionalidades entregues. SQS, Inbox, publishers e workers permanecem futuros; readiness sinaliza SQS ausente.
+Serviço financeiro distribuído da Jungle Gaming. Preserve correção financeira, rastreabilidade e recuperação entre instâncias. O estado atual inclui persistência, domínios Financial/Wagering, ProcessWagerUseCase, Outbox transacional, API HTTP com abertura/consultas/reconciliação por snapshot e consumer SQS FIFO independente com Inbox/ACK após commit. Readiness verifica PostgreSQL/SQS/FIFO/redrive/DLQ. Publisher e worker de referências permanecem futuros; componentes planejados não são funcionalidades entregues. [Operação SQS](docs/sqs-consumer.md).
 
 ## Fontes e contexto
 
@@ -19,7 +19,7 @@ Antes de implementar: identifique o escopo pelo grafo; leia o `AGENTS.md` local;
 
 ## Stack e fronteiras
 
-NestJS, TypeScript strict, Bun 1.x (versão fixada no package.json), ESLint strict type-aware e Prettier com tabs/largura 4. Fundação PostgreSQL/MikroORM e Compose implementada; SQS FIFO pertence às etapas seguintes. Schema e limites estão em [docs/persistence.md](docs/persistence.md).
+NestJS, TypeScript strict, Bun 1.x (versão fixada no package.json), ESLint strict type-aware e Prettier com tabs/largura 4. PostgreSQL/MikroORM e SQS FIFO/LocalStack em Compose implementados; publisher e worker são etapas seguintes. Schema e limites estão em [docs/persistence.md](docs/persistence.md).
 
 Siga as dependências de [ARCHITECTURE.md](ARCHITECTURE.md): domínio independente de frameworks, aplicação por contratos, adapters por portas, acesso entre módulos apenas por `public`, Financial independente de Wagering e composição em bootstrap. Não relaxe verificações para acomodar uma implementação. Não crie TypeScript para preencher pastas nem agentes autônomos sem necessidade.
 
