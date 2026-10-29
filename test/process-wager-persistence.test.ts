@@ -417,3 +417,479 @@ test.each(['ledger', 'wallet', 'idempotency', 'wager', 'outbox'] as const)(
 		await inspect(wallet, '90.00', 2, ['PROCESSED'], 2);
 	},
 );
+
+test('replay uses historical balance; different payload conflicts; different providers remain independent', async () => {
+	const wallet = await opened();
+	const command = input(wallet);
+	const original = await useCase.execute(command);
+	await useCase.execute(input(wallet, { kind: 'WIN' }));
+	const events = await orm.em
+		.fork()
+		.find(OutboxMessageRow, { correlationId: original.transactionId });
+	expect(await useCase.execute(command)).toEqual({
+		...original,
+		idempotentReplay: true,
+	});
+	expect(useCase.execute({ ...command, kind: 'WIN' })).rejects.toMatchObject({
+		code: 'IDEMPOTENCY_CONFLICT',
+	});
+	expect(
+		useCase.execute({ ...command, idempotencyKey: 'new' }),
+	).rejects.toMatchObject({
+		code: 'EXTERNAL_TRANSACTION_CONFLICT',
+		samePayload: true,
+	});
+	expect(
+		useCase.execute({
+			...command,
+			idempotencyKey: 'divergent',
+			kind: 'WIN',
+		}),
+	).rejects.toMatchObject({
+		code: 'EXTERNAL_TRANSACTION_CONFLICT',
+		samePayload: false,
+	});
+	expect(
+		await useCase.execute({ ...command, providerId: 'another-provider' }),
+	).toMatchObject({ status: 'PROCESSED', idempotentReplay: false });
+	await inspect(
+		wallet,
+		'90.00',
+		4,
+		['PROCESSED', 'PROCESSED', 'PROCESSED'],
+		4,
+	);
+	expect(
+		await orm.em.fork().count(IdempotencyRecordRow, {
+			idempotencyKey: { $in: ['new', 'divergent'] },
+		}),
+	).toBe(0);
+	expect(
+		await orm.em
+			.fork()
+			.find(OutboxMessageRow, { correlationId: original.transactionId }),
+	).toEqual(events);
+});
+
+test.each([
+	['BET', 'REFUND'],
+	['BET', 'ROLLBACK'],
+	['WIN', 'ROLLBACK'],
+] as const)(
+	'SQL %s followed by %s has exact inverse ledger',
+	async (kind, reversalKind) => {
+		const wallet = await opened();
+		const original = input(wallet, { kind });
+		await useCase.execute(original);
+		const reversal = input(wallet, {
+			kind: reversalKind,
+			referenceExternalTransactionId: original.externalTransactionId,
+		});
+		const result = await useCase.execute(reversal);
+		expect(result).toMatchObject({
+			status: 'PROCESSED',
+			balance: { amount: '100.00' },
+		});
+		expect(await useCase.execute(reversal)).toMatchObject({
+			status: 'PROCESSED',
+			idempotentReplay: true,
+		});
+		await inspect(wallet, '100.00', 3, ['PROCESSED', 'PROCESSED'], 3);
+		const entry = await orm.em.fork().findOneOrFail(WalletLedgerEntryRow, {
+			transactionId: result.transactionId,
+		});
+		expect(entry).toMatchObject({
+			direction: kind === 'WIN' ? 'DEBIT' : 'CREDIT',
+			amount: '10.00',
+			balanceAfter: '100.00',
+		});
+	},
+);
+
+test('SQL rollback of refund remains distinct; rejected reversal cannot enable a duplicate chain credit', async () => {
+	const wallet = await opened();
+	const bet = input(wallet);
+	await useCase.execute(bet);
+	const refund = input(wallet, {
+		kind: 'REFUND',
+		referenceExternalTransactionId: bet.externalTransactionId,
+	});
+	await useCase.execute(refund);
+	await useCase.execute(
+		input(wallet, {
+			kind: 'ROLLBACK',
+			referenceExternalTransactionId: refund.externalTransactionId,
+		}),
+	);
+	expect(
+		await useCase.execute(
+			input(wallet, {
+				kind: 'ROLLBACK',
+				referenceExternalTransactionId: bet.externalTransactionId,
+			}),
+		),
+	).toMatchObject({
+		status: 'REJECTED',
+		failureCode: 'CUMULATIVE_REVERSAL_NOT_ALLOWED',
+	});
+	expect(
+		await useCase.execute(
+			input(wallet, {
+				kind: 'REFUND',
+				referenceExternalTransactionId: bet.externalTransactionId,
+			}),
+		),
+	).toMatchObject({ status: 'REJECTED', failureCode: 'DUPLICATE_REVERSAL' });
+	await inspect(
+		wallet,
+		'90.00',
+		4,
+		['PROCESSED', 'PROCESSED', 'PROCESSED', 'REJECTED', 'REJECTED'],
+		4,
+	);
+});
+
+test('SQL rollback first then refund is rejected without cumulative credit', async () => {
+	const wallet = await opened();
+	const bet = input(wallet);
+	await useCase.execute(bet);
+	await useCase.execute(
+		input(wallet, {
+			kind: 'ROLLBACK',
+			referenceExternalTransactionId: bet.externalTransactionId,
+		}),
+	);
+	expect(
+		await useCase.execute(
+			input(wallet, {
+				kind: 'REFUND',
+				referenceExternalTransactionId: bet.externalTransactionId,
+			}),
+		),
+	).toMatchObject({
+		status: 'REJECTED',
+		failureCode: 'CUMULATIVE_REVERSAL_NOT_ALLOWED',
+	});
+	await inspect(
+		wallet,
+		'100.00',
+		3,
+		['PROCESSED', 'PROCESSED', 'REJECTED'],
+		3,
+	);
+});
+
+test.each(['PENDING', 'PENDING_REFERENCE', 'REJECTED', 'FAILED'] as const)(
+	'SQL reference %s is durable and has no reversal effects',
+	async status => {
+		const wallet = await opened();
+		const original = input(wallet);
+		const reference = WagerTransaction.rehydrate({
+			...original,
+			id: crypto.randomUUID(),
+			walletId: wallet.id,
+			money: money('10.00'),
+			payloadHash: 'seeded',
+			createdAt: changedAt,
+			status,
+			referenceExternalTransactionId:
+				status === 'PENDING_REFERENCE' ? 'older' : undefined,
+			...(status === 'REJECTED' || status === 'FAILED'
+				? { failureCode: 'SEEDED' }
+				: {}),
+		});
+		await uow.execute(context => context.transactions.insert(reference));
+		const result = await useCase.execute(
+			input(wallet, {
+				kind: 'REFUND',
+				referenceExternalTransactionId: original.externalTransactionId,
+			}),
+		);
+		if (status === 'REJECTED' || status === 'FAILED')
+			expect(result).toMatchObject({
+				status: 'REJECTED',
+				failureCode: 'REFERENCE_TERMINAL_INELIGIBLE',
+			});
+		else
+			expect(result).toMatchObject({
+				status: 'PENDING',
+				pendingReference: {
+					reason: 'NOT_PROCESSED',
+					transactionId: reference.id,
+					status,
+				},
+			});
+		await uow.execute(async context => {
+			expect((await context.wallets.findById(wallet.id))?.version).toBe(
+				1,
+			);
+			expect(await context.ledger.findByWalletId(wallet.id)).toHaveLength(
+				1,
+			);
+			expect(
+				(await context.transactions.findById(result.transactionId))
+					?.status,
+			).toBe(result.status);
+		});
+		expect(
+			await orm.em.fork().count(IdempotencyRecordRow, {
+				transactionId: result.transactionId,
+				status: 'COMPLETED',
+			}),
+		).toBe(1);
+		expect(
+			await orm.em.fork().count(OutboxMessageRow, {
+				correlationId: result.transactionId,
+			}),
+		).toBe(status === 'REJECTED' || status === 'FAILED' ? 1 : 0);
+	},
+);
+
+test('SQL insufficient rollback rejects without financial change or version increment', async () => {
+	const wallet = await opened();
+	const win = input(wallet, { kind: 'WIN' });
+	await useCase.execute(win);
+	await useCase.execute(
+		input(wallet, { amount: { amount: '110.00', currency: 'BRL' } }),
+	);
+	expect(
+		await useCase.execute(
+			input(wallet, {
+				kind: 'ROLLBACK',
+				referenceExternalTransactionId: win.externalTransactionId,
+			}),
+		),
+	).toMatchObject({
+		status: 'REJECTED',
+		failureCode: 'REVERSAL_INSUFFICIENT_BALANCE',
+	});
+	await inspect(wallet, '0.00', 3, ['PROCESSED', 'PROCESSED', 'REJECTED'], 3);
+});
+
+test('malformed player identity cannot debit a different UTF-8 identity in PostgreSQL', async () => {
+	const wallet = WalletEntity.create({
+		id: crypto.randomUUID(),
+		playerId: '\ufffd',
+		currency: 'BRL',
+		createdAt: changedAt,
+	});
+	await uow.execute(context => context.wallets.insert(wallet));
+	await useCase.execute(
+		input(wallet, {
+			kind: 'WIN',
+			amount: { amount: '100.00', currency: 'BRL' },
+		}),
+	);
+	expect(
+		useCase.execute(input(wallet, { playerId: '\ud800' })),
+	).rejects.toThrow('Unicode');
+	await inspect(wallet, '100.00', 2, ['PROCESSED'], 1);
+});
+
+async function blocked(pids: number[]): Promise<void> {
+	const deadline = Date.now() + 5_000;
+	while (Date.now() < deadline) {
+		const rows = await orm.em.execute<{ application_name: string }[]>(
+			"select application_name from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'",
+		);
+		if (
+			pids.every(pid =>
+				rows.some(
+					row => row.application_name === `wager-test-${String(pid)}`,
+				),
+			)
+		) {
+			console.log(JSON.stringify({ blockedPids: pids }));
+			return;
+		}
+		await Bun.sleep(10);
+	}
+	throw new Error('Bun contenders never reached SQL lock wait');
+}
+type Child = ReturnType<typeof wagerChild>;
+function child(command: ProcessWagerCommand, mode = 'normal'): Child {
+	if (postgres === undefined) throw new Error('Missing PostgreSQL');
+	return wagerChild(postgres.env, command, mode);
+}
+async function ready(children: Child[]): Promise<void> {
+	expect(await Promise.all(children.map(c => c.next()))).toEqual(
+		children.map(() => 'ready'),
+	);
+}
+async function close(children: Child[]): Promise<void> {
+	await Promise.all(children.map(c => c.close()));
+}
+
+async function compete(children: Child[]): Promise<string[]> {
+	await ready(children);
+	const [holder, ...contenders] = children;
+	if (holder === undefined) throw new Error('Missing holder');
+	await holder.signal();
+	expect(await holder.next()).toBe('before-commit');
+	await Promise.all(contenders.map(c => c.signal()));
+	await blocked(contenders.map(c => c.pid));
+	await holder.signal();
+	return Promise.all(children.map(c => c.next()));
+}
+
+test('three independent Bun processes serialize BETs on one wallet without lost updates', async () => {
+	const wallet = await opened();
+	const children = [
+		child(input(wallet), 'hold-commit'),
+		child(input(wallet)),
+		child(input(wallet)),
+	];
+	try {
+		const results = await compete(children);
+		expect(results).toEqual(['PROCESSED', 'PROCESSED', 'PROCESSED']);
+		await inspect(
+			wallet,
+			'70.00',
+			4,
+			['PROCESSED', 'PROCESSED', 'PROCESSED'],
+			4,
+		);
+	} finally {
+		await close(children);
+	}
+}, 20_000);
+
+test('distinct wallets commit in parallel while a third process holds its wallet lock', async () => {
+	const wallets = await Promise.all([opened(), opened(), opened()]);
+	const children = wallets.map((wallet, i) =>
+		child(input(wallet), i === 0 ? 'hold-commit' : 'normal'),
+	);
+	try {
+		await ready(children);
+		const holder = children[0];
+		if (holder === undefined) throw new Error('Missing holder');
+		await holder.signal();
+		expect(await holder.next()).toBe('before-commit');
+		const others = children.slice(1);
+		await Promise.all(others.map(c => c.signal()));
+		expect(await Promise.all(others.map(c => c.next()))).toEqual([
+			'PROCESSED',
+			'PROCESSED',
+		]);
+		await holder.signal();
+		expect(await holder.next()).toBe('PROCESSED');
+		for (const wallet of wallets)
+			await inspect(wallet, '90.00', 2, ['PROCESSED'], 2);
+	} finally {
+		await close(children);
+	}
+}, 20_000);
+
+test('rollback releases SQL locks to two independent 80.00 BETs, exactly one succeeds', async () => {
+	const wallet = await opened();
+	const debit = (): ProcessWagerCommand =>
+		input(wallet, { amount: { amount: '80.00', currency: 'BRL' } });
+	const held = input(wallet);
+	const children = [
+		child(held, 'hold-rollback'),
+		child(debit()),
+		child(debit()),
+	];
+	try {
+		const results = await compete(children);
+		expect(results[0]).toBe('rolled-back');
+		expect(results.slice(1).sort()).toEqual(['PROCESSED', 'REJECTED']);
+		await inspect(wallet, '20.00', 2, ['PROCESSED', 'REJECTED'], 2);
+		const debitEntries = await orm.em.fork().find(WalletLedgerEntryRow, {
+			walletId: wallet.id,
+			direction: 'DEBIT',
+		});
+		expect(debitEntries.map(e => e.amount)).toEqual(['80.00']);
+		expect(
+			await orm.em.fork().count(IdempotencyRecordRow, {
+				idempotencyKey: held.idempotencyKey,
+			}),
+		).toBe(0);
+	} finally {
+		await close(children);
+	}
+}, 20_000);
+
+test.each(['same-key', 'external-identity'] as const)(
+	'three processes competing for %s apply a single debit',
+	async scenario => {
+		const wallet = await opened();
+		const command = input(wallet);
+		const children = [0, 1, 2].map(i =>
+			child(
+				{
+					...command,
+					idempotencyKey:
+						scenario === 'same-key'
+							? command.idempotencyKey
+							: `${command.idempotencyKey}-${String(i)}`,
+				},
+				i === 0 ? 'hold-commit' : 'normal',
+			),
+		);
+		try {
+			const results = await compete(children);
+			expect(results).toEqual(
+				scenario === 'same-key'
+					? ['PROCESSED', 'REPLAY', 'REPLAY']
+					: [
+							'PROCESSED',
+							'EXTERNAL_TRANSACTION_CONFLICT',
+							'EXTERNAL_TRANSACTION_CONFLICT',
+						],
+			);
+			await inspect(wallet, '90.00', 2, ['PROCESSED'], 2);
+		} finally {
+			await close(children);
+		}
+	},
+	20_000,
+);
+
+test.each(['cross-kind', 'same-kind'] as const)(
+	'three processes cannot duplicate reversals: %s',
+	async scenario => {
+		const wallet = await opened();
+		const bet = input(wallet);
+		await useCase.execute(bet);
+		const refund = input(wallet, {
+			kind: 'REFUND',
+			referenceExternalTransactionId: bet.externalTransactionId,
+		});
+		const children = [
+			child(refund, 'hold-commit'),
+			child(
+				input(wallet, {
+					kind: scenario === 'cross-kind' ? 'ROLLBACK' : 'REFUND',
+					referenceExternalTransactionId: bet.externalTransactionId,
+				}),
+			),
+			child(input(wallet, { kind: 'LOSS' })),
+		];
+		try {
+			const results = await compete(children);
+			expect(results).toEqual(['PROCESSED', 'REJECTED', 'PROCESSED']);
+			await inspect(
+				wallet,
+				'100.00',
+				3,
+				['PROCESSED', 'PROCESSED', 'REJECTED', 'PROCESSED'],
+				3,
+			);
+			const rejected = await orm.em
+				.fork()
+				.findOneOrFail(WagerTransactionRow, {
+					walletId: wallet.id,
+					status: 'REJECTED',
+				});
+			expect(rejected.failureCode).toBe(
+				scenario === 'cross-kind'
+					? 'CUMULATIVE_REVERSAL_NOT_ALLOWED'
+					: 'DUPLICATE_REVERSAL',
+			);
+		} finally {
+			await close(children);
+		}
+	},
+	20_000,
+);
