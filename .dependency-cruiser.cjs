@@ -52,7 +52,8 @@ module.exports = {
 			severity: 'error',
 			from: {
 				path: '^src/',
-				pathNot: '^src/(bootstrap/|main\\.(api|consumer)\\.ts$)',
+				pathNot:
+					'^src/(bootstrap/|main\\.(api|consumer|publisher)\\.ts$)',
 			},
 			to: { path: '^src/bootstrap/' },
 		},

@@ -13,6 +13,8 @@
 		"start": "bun dist/main.api.js",
 		"consumer": "bun src/main.consumer.ts",
 		"consumer:start": "bun dist/main.consumer.js",
+		"publisher": "bun src/main.publisher.ts",
+		"publisher:start": "bun dist/main.publisher.js",
 		"sqs:provision": "bun src/platform/messaging/provision-sqs.ts",
 		"typecheck": "bun --bun tsc --noEmit",
 		"lint": "bun --bun eslint . --max-warnings=0 && bun run architecture",
