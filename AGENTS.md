@@ -1,6 +1,6 @@
 # Distributed Wagering Processor
 
-Serviço financeiro distribuído da Jungle Gaming. Preserve correção financeira, rastreabilidade e recuperação entre instâncias. O estado atual inclui persistência, domínios Financial/Wagering, ProcessWagerUseCase, Outbox transacional, API HTTP com abertura/consultas/reconciliação por snapshot e consumer SQS FIFO independente com Inbox/ACK após commit. Readiness verifica PostgreSQL/SQS/FIFO/redrive/DLQ. Publisher independente com claims/lease/fencing está implementado; worker de referências permanece futuro; componentes planejados não são funcionalidades entregues. [Operação SQS](docs/sqs-consumer.md) e [publisher](docs/outbox-publisher.md).
+Serviço financeiro distribuído da Jungle Gaming. Preserve correção financeira, rastreabilidade e recuperação entre instâncias. O estado atual inclui persistência, domínios Financial/Wagering, ProcessWagerUseCase, Outbox transacional, API HTTP com abertura/consultas/reconciliação por snapshot e consumer SQS FIFO independente com Inbox/ACK após commit. Readiness verifica PostgreSQL/SQS/FIFO/redrive/DLQ. Publisher independente com claims/lease/fencing está implementado; worker de referências está implementado na Task 11; componentes planejados não são funcionalidades entregues. [Operação SQS](docs/sqs-consumer.md), [publisher](docs/outbox-publisher.md) e [worker de referências](docs/pending-reference-worker.md).
 
 ## Fontes e contexto
 

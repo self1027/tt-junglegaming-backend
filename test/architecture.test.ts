@@ -24,6 +24,12 @@ interface ImportCase {
 
 const cases: ImportCase[] = [
 	{
+		name: 'pending worker entrypoint can compose bootstrap',
+		from: 'src/main.pending-worker.ts',
+		to: 'src/bootstrap/b.ts',
+		specifier: './bootstrap/b.js',
+	},
+	{
 		name: 'publisher infrastructure rejects Financial internals',
 		from: 'src/platform/messaging/outbox-publisher.ts',
 		to: `${financial}/adapters/b.ts`,
@@ -278,6 +284,7 @@ describe('ESLint architectural guards', () => {
 
 	test('publisher loop and SQS adapter reject direct financial mutations', async () => {
 		for (const filePath of [
+			'src/modules/wagering/adapters/worker/pending-reference-worker.ts',
 			'src/platform/messaging/outbox-publisher.ts',
 			'src/modules/wagering/adapters/sqs/sqs-event-publisher.ts',
 		]) {
@@ -293,6 +300,40 @@ describe('ESLint architectural guards', () => {
 					),
 			).toBe(true);
 		}
+	});
+
+	test('pending resolver rejects insertion of another WagerTransaction', async () => {
+		const result = await eslint.lintText(
+			'export async function resolve(context: { transactions: { insert(): Promise<void> } }): Promise<void> { await context.transactions.insert(); }',
+			{
+				filePath:
+					'src/modules/wagering/application/resolve-pending-wager.use-case.ts',
+			},
+		);
+		expect(
+			result
+				.flatMap(file => file.messages)
+				.some(message =>
+					message.message.includes('existing WagerTransaction'),
+				),
+		).toBe(true);
+	});
+
+	test('pending resolution repository rejects an independent transaction', async () => {
+		const result = await eslint.lintText(
+			'export class MikroOrmPendingResolutionRepository { save(em: { commit(): void }): void { em.commit(); } }',
+			{
+				filePath:
+					'src/modules/wagering/adapters/persistence/mikro-orm-pending.repository.ts',
+			},
+		);
+		expect(
+			result
+				.flatMap(file => file.messages)
+				.some(message =>
+					message.message.includes('supplied TransactionSession'),
+				),
+		).toBe(true);
 	});
 
 	test('rejects financial mutations in the consumer', async () => {
