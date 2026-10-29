@@ -404,3 +404,159 @@ test.each(['PENDING', 'PENDING_REFERENCE', 'REJECTED', 'FAILED'] as const)(
 		);
 	},
 );
+
+test('incompatible reference rejects without additional financial effects', async () => {
+	const f = fixture();
+	const original = command({ roundId: 'another-round' });
+	await f.useCase.execute(original);
+	expect(
+		await f.useCase.execute(
+			command({
+				kind: 'REFUND',
+				referenceExternalTransactionId: original.externalTransactionId,
+			}),
+		),
+	).toMatchObject({
+		status: 'REJECTED',
+		failureCode: 'INCOMPATIBLE_REFERENCE',
+	});
+	expect(f.entries).toHaveLength(1);
+	expect(f.wallet.version).toBe(2);
+});
+
+test('replay preserves historical balance, conflicting key and different key external identity are application errors', async () => {
+	const f = fixture();
+	const input = command();
+	const result = await f.useCase.execute(input);
+	await f.useCase.execute(command({ kind: 'WIN' }));
+	expect(await f.useCase.execute(input)).toEqual({
+		...result,
+		idempotentReplay: true,
+	});
+	expect(f.wallet.balance.toProps().amount).toBe('100.00');
+	expect(f.useCase.execute({ ...input, kind: 'WIN' })).rejects.toMatchObject({
+		code: 'IDEMPOTENCY_CONFLICT',
+	});
+	expect(
+		f.useCase.execute({ ...input, idempotencyKey: 'new-key' }),
+	).rejects.toMatchObject({
+		code: 'EXTERNAL_TRANSACTION_CONFLICT',
+		transactionId: result.transactionId,
+		samePayload: true,
+	});
+	expect(f.entries).toHaveLength(2);
+	expect(f.transactions.size).toBe(2);
+	expect(f.events).toHaveLength(4);
+});
+
+test('Outbox failure propagates to UnitOfWork without a confirmed response', () => {
+	const f = fixture();
+	const failure = new Error('outbox unavailable');
+	f.stats.outboxFault = failure;
+	expect(f.useCase.execute(command())).rejects.toBe(failure);
+	expect(f.events).toHaveLength(0);
+	expect(
+		[...f.results.values()].every(record => record.result === undefined),
+	).toBe(true);
+});
+
+test('rejected replay keeps one rejection event with the original failure code', async () => {
+	const f = fixture();
+	const rejected = command({ amount: { amount: '101.00', currency: 'BRL' } });
+	await f.useCase.execute(rejected);
+	await f.useCase.execute(rejected);
+	expect(f.events).toHaveLength(1);
+	expect(f.events[0]?.toJSON()).toMatchObject({
+		eventType: 'WagerTransactionRejected',
+		data: { failureCode: 'BET_INSUFFICIENT_BALANCE', status: 'REJECTED' },
+	});
+});
+
+test('technical failures propagate the original cause instead of persisting FAILED', () => {
+	const f = fixture();
+	const failure = new Error('temporary database failure');
+	f.stats.fault = failure;
+	expect(f.useCase.execute(command())).rejects.toBe(failure);
+	expect([...f.transactions.values()].some(t => t.status === 'FAILED')).toBe(
+		false,
+	);
+});
+
+test('missing wallet is an application error', () => {
+	const f = fixture();
+	f.stats.missingWallet = true;
+	expect(f.useCase.execute(command())).rejects.toBeInstanceOf(
+		WagerApplicationError,
+	);
+	expect(f.transactions.size).toBe(0);
+});
+
+test('canonical payload normalizes money/null, excludes key, and snapshots inputs before awaiting hash', async () => {
+	const amount = { amount: '00010.00', currency: 'BRL' };
+	const input = command({ amount, referenceExternalTransactionId: null });
+	const first = prepareWager(input);
+	amount.amount = '99.00';
+	const prepared = await first;
+	const equivalent = await prepareWager({
+		...input,
+		amount: { amount: '10.00', currency: 'BRL' },
+		idempotencyKey: 'other',
+		referenceExternalTransactionId: undefined,
+	});
+	expect(prepared.payloadHash).toBe(equivalent.payloadHash);
+	expect(prepared.money.toProps().amount).toBe('10.00');
+	expect(prepared.payloadHash).toMatch(/^[a-f0-9]{64}$/);
+});
+
+test.each([
+	'providerId',
+	'externalTransactionId',
+	'idempotencyKey',
+	'playerId',
+	'roundId',
+	'gameId',
+	'referenceExternalTransactionId',
+] as const)(
+	'rejects malformed Unicode in %s before SQL can collapse identities',
+	field => {
+		expect(prepareWager(command({ [field]: '\ud800' }))).rejects.toThrow(
+			'Unicode',
+		);
+	},
+);
+
+test('valid Unicode pairs and replacement characters retain their exact identities', async () => {
+	const prepared = await prepareWager(
+		command({ playerId: 'jogador 🦧 �', providerId: 'provedor:á' }),
+	);
+	expect(prepared.playerId).toBe('jogador 🦧 �');
+	expect(prepared.providerId).toBe('provedor:á');
+});
+
+test('canonical hash matches the documented UTF-8 SHA-256 vector', async () => {
+	const prepared = await prepareWager(
+		command({ externalTransactionId: 'external' }),
+	);
+	expect(prepared.payloadHash).toBe(
+		'35699b68766e8b33676fe8bf6f0e5090f87d72a89e7383364450ef7767f67bb3',
+	);
+});
+
+test('committed IN_PROGRESS is reported distinctly from a persisted pending operation', async () => {
+	const f = fixture();
+	const input = command();
+	const prepared = await prepareWager(input);
+	f.results.set(
+		JSON.stringify([
+			`wagering:v1:${JSON.stringify(input.providerId)}`,
+			input.idempotencyKey,
+		]),
+		{ hash: prepared.payloadHash },
+	);
+	expect(f.useCase.execute(input)).rejects.toMatchObject({
+		code: 'IDEMPOTENCY_IN_PROGRESS',
+	});
+	expect(f.entries).toHaveLength(0);
+	expect(f.transactions.size).toBe(0);
+	expect(f.wallet.version).toBe(1);
+});
