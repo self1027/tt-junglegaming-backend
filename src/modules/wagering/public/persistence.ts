@@ -8,6 +8,7 @@ import type { WagerReversalKind } from '../domain/wager-types.js';
 import type { ProcessWagerResult } from './process-wager.js';
 import type { OutboxRepository } from './events.js';
 import type { InboxRepository } from './inbox.js';
+import type { PendingResolutionRepository } from './pending.js';
 
 /** Compatibility contract for technical insertion; the use case persists domain entities. */
 export interface ProcessedWagerRecord {
@@ -57,6 +58,18 @@ export type IdempotencyClaim =
 	  };
 
 export interface IdempotencyRepository {
+	lockResult(
+		scope: string,
+		key: string,
+		payloadHash: string,
+		transactionId: string,
+	): Promise<ProcessWagerResult | undefined>;
+	resolvePending(
+		scope: string,
+		key: string,
+		payloadHash: string,
+		result: ProcessWagerResult,
+	): Promise<void>;
 	/** INSERT ON CONFLICT waits for the competing transaction, then reads under lock. */
 	claim(
 		scope: string,
@@ -72,6 +85,7 @@ export interface IdempotencyRepository {
 }
 
 export interface WageringTransactionContext extends FinancialTransactionContext {
+	readonly pending?: PendingResolutionRepository;
 	readonly inbox?: InboxRepository;
 	readonly transactions: WagerTransactionRepository;
 	readonly idempotency: IdempotencyRepository;

@@ -66,7 +66,7 @@ function first(claims: readonly OutboxClaim[]): OutboxClaim {
 }
 
 test('incremental migration down/status/up preserves legacy pending and published envelopes', async () => {
-	await orm.migrator.down();
+	await orm.migrator.down({ to: 'Migration202610280002' });
 	const ids = await seed();
 	const id = ids[0];
 	await orm.em.execute(

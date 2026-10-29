@@ -153,9 +153,14 @@ test('SQL forbids cross-kind processed reversals while rejected attempts remain 
 	await uow.execute(context => context.transactions.insert(refund));
 	await orm.migrator.down({ to: 'Migration202610280001' });
 	expect(
+		await orm.em.execute('select id from wager_transactions where id = ?', [
+			refund.id,
+		]),
+	).toHaveLength(1);
+	await orm.migrator.up();
+	expect(
 		await uow.execute(context => context.transactions.findById(refund.id)),
 	).toBeDefined();
-	await orm.migrator.up();
 	const rollback = make('ROLLBACK', bet.externalTransactionId);
 	rollback.markProcessed(changedAt, {
 		transaction: bet,

@@ -11,6 +11,62 @@ import { wagerResultFromJson } from './mappers.js';
 export class MikroOrmIdempotencyRepository implements IdempotencyRepository {
 	constructor(private readonly session: TransactionSession) {}
 
+	async lockResult(
+		scope: string,
+		key: string,
+		payloadHash: string,
+		transactionId: string,
+	): Promise<ProcessWagerResult | undefined> {
+		const row = await this.session.em.findOne(
+			IdempotencyRecordRow,
+			{
+				scope,
+				idempotencyKey: key,
+				payloadHash,
+				transactionId,
+				status: 'COMPLETED',
+			},
+			{ lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true },
+		);
+		return row === null
+			? undefined
+			: wagerResultFromJson(row.originalResult);
+	}
+
+	async resolvePending(
+		scope: string,
+		key: string,
+		payloadHash: string,
+		result: ProcessWagerResult,
+	): Promise<void> {
+		if (
+			result.idempotentReplay ||
+			!['PROCESSED', 'REJECTED'].includes(result.status)
+		)
+			throw new Error('Invalid terminal resolution');
+		const changed = await this.session.em.execute<{ id: string }[]>(
+			`
+			update idempotency_records set original_result = ?::jsonb, updated_at = clock_timestamp()
+			where scope = ? and idempotency_key = ? and payload_hash = ? and status = 'COMPLETED'
+				and transaction_id = ? and original_result->>'transactionId' = ?
+				and original_result->>'walletId' = ? and original_result->>'externalTransactionId' = ?
+				and original_result->>'status' in ('PENDING', 'PENDING_REFERENCE') returning id
+		`,
+			[
+				JSON.stringify(result),
+				scope,
+				key,
+				payloadHash,
+				result.transactionId,
+				result.transactionId,
+				result.walletId,
+				result.externalTransactionId,
+			],
+		);
+		if (changed.length !== 1)
+			throw new Error('Idempotency resolution conflict');
+	}
+
 	async claim(
 		scope: string,
 		key: string,

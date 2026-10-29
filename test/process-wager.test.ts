@@ -117,6 +117,10 @@ function fixture(): {
 				),
 		},
 		idempotency: {
+			lockResult: () =>
+				Promise.reject(new Error('Not a pending resolution')),
+			resolvePending: () =>
+				Promise.reject(new Error('Not a pending resolution')),
 			claim: (scope, key, hash) => {
 				const identity = JSON.stringify([scope, key]);
 				const record = results.get(identity);

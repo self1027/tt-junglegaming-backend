@@ -68,6 +68,9 @@ export function wagerToRow(
 		lastAttemptAt: null,
 		nextAttemptAt: null,
 		lastError: null,
+		claimToken: null,
+		claimedBy: null,
+		claimedUntil: null,
 	};
 }
 

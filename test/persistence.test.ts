@@ -91,6 +91,7 @@ describe('PostgreSQL foundation', () => {
 			'Migration202610280001',
 			'Migration202610280002',
 			'Migration202610290001',
+			'Migration202610290002',
 		]);
 		expect(await orm.migrator.getPending()).toHaveLength(0);
 		await orm.em.fork().persist(wallet()).flush();
