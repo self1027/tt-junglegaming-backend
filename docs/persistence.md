@@ -2,7 +2,7 @@
 
 Decisão e ambiguidades: [ARCHITECTURE.md](../ARCHITECTURE.md#fundação-de-persistência--decisão-aprovada-nesta-tarefa). Requisitos: §§4–6, 7.1, 9–11 e 13 do [enunciado imutável](challenge.md), [Financial](domain/financial.md), [Wagering](domain/wagering.md) e [Messaging](domain/messaging.md).
 
-Entregue: armazenamento, integridade estrutural, [integração financeira transacional](#integração-financeira-e-unitofwork), [processamento atômico da Task 06](#task-06--processamento-atômico) e [inserção Outbox da Task 07](#task-07--outbox-transacional). Os modelos não são entidades de domínio. Consumer, publisher, Inbox e workers não estão implementados.
+Entregue: armazenamento, integridade estrutural, [integração financeira transacional](#integração-financeira-e-unitofwork), [processamento atômico da Task 06](#task-06--processamento-atômico) e [inserção Outbox da Task 07](#task-07--outbox-transacional). Os modelos não são entidades de domínio. A Task 09 acrescenta consumer e Inbox transacional; publisher e workers não estão implementados.
 
 ## Versões e execução
 
@@ -93,7 +93,25 @@ O teste de lock mantém `PESSIMISTIC_WRITE` numa wallet e, após confirmar a aqu
 
 `bun test test/api.test.ts` usa outro container isolado e comprova inicialização Nest, HTTP liveness real e fechamento do pool. A suíte normal `bun run test` inclui esses testes e os testes negativos de arquitetura, inclusive rejeição de imports ORM em domínio/aplicação.
 
-Pendências atuais: backoff/TTL, claims/leases de workers, atualização condicionada de resultados pendentes pelo worker, publishers concorrentes, Inbox e crash/ACK. As evidências históricas dos adapters abaixo não substituem as do processador completo nas Tasks 06 e 07.
+Pendências atuais: backoff/TTL, claims/leases de workers, atualização condicionada de resultados pendentes pelo worker, publishers concorrentes e recuperação de publicação. Inbox e crash/ACK estão cobertos na Task 09. As evidências históricas dos adapters abaixo não substituem as do processador completo nas Tasks 06 e 07.
+
+## Task 09 — Inbox transacional
+
+[Porta](../src/modules/wagering/public/inbox.ts) e
+[adapter](../src/modules/wagering/adapters/persistence/mikro-orm-inbox.repository.ts)
+reutilizam inbox_messages e suas constraints existentes; nenhuma migration nova.
+Bootstrap compõe com a mesma sessão de wallet/ledger/Wagering/idempotência/Outbox.
+Claim SQL vem antes dos locks de negócio; não há commit próprio, lease ou segunda
+UnitOfWork. [Identidade/hash, estados, tentativas e ACK](domain/messaging.md#task-09--protocolo-de-recepção-implementado).
+
+Asserções reais em [Inbox](../test/inbox.test.ts) e
+[SQS/consumer](../test/sqs-consumer.test.ts): commit conjunto, rollback de todos
+os participantes ao falhar conclusão, claims concorrentes, conflito de hash,
+redelivery/crash antes/depois do commit, duplicatas de negócio entre transportes.
+O consumer configura statement_timeout e transaction_timeout no PostgreSQL via
+conexão, sem mudar limites da API; o harness consulta os settings efetivos.
+O prazo externo de shutdown pode terminar primeiro: desconexão libera/reverte
+transação não confirmada e a mensagem permanece recuperável. [Relatório](task09-sqs-report.md).
 
 ## Task 07 — Outbox transacional
 
@@ -199,7 +217,7 @@ Histórico da tarefa Financial Persistence Integration & Transactional UnitOfWor
 
 `execute<T>(work: (context) => Promise<T>): Promise<T>` abre uma transação READ COMMITTED, entrega o contexto e só resolve após commit. Rejeição do callback ou erro SQL não tratado causa rollback e propaga o erro original. Colaboradores devem receber o contexto e aguardar todas as operações; uma nova chamada a `execute` é outra transação, inclusive dentro de um callback. Não compartilhar instâncias de domínio entre execuções, usar repositórios depois do callback ou capturar falha SQL para continuar uma transação abortada. Não há retries automáticos. Comportamento transacional segue a [API oficial MikroORM](https://mikro-orm.io/docs/transactions), exercitada na versão instalada.
 
-As escritas são parametrizadas pelo ORM, executadas imediatamente no EntityManager transacional. Nenhum repositório abre transação ou faz commit/flush independente. Uma falha de FK/UNIQUE/CHECK mantém código PostgreSQL reconhecível pelo chamador. O contexto atual contém idempotência, Wagering e Outbox; Inbox permanece futura.
+As escritas são parametrizadas pelo ORM, executadas imediatamente no EntityManager transacional. Nenhum repositório abre transação ou faz commit/flush independente. Uma falha de FK/UNIQUE/CHECK mantém código PostgreSQL reconhecível pelo chamador. O contexto atual contém idempotência, Wagering, Outbox e Inbox opcional, todos vinculados à mesma TransactionSession.
 
 Ordem de criação: **wallet → transação financeira → ledger**, por causa das FKs imediatas. Em wallet existente, adquirir lock antes de qualquer cálculo sobre saldo; atualizar wallet e inserir a transação antes de inserir o ledger. Erro posterior reverte todos os efeitos. Os testes também escrevem transação/ledger antes de uma atualização que falha, para comprovar rollback dessa ordem. UnitOfWork garante a fronteira atômica, não exige efeitos de negócio: cabe ao futuro coordenador associar cada BalanceChange ao registro e ledger corretos.
 

@@ -14,13 +14,13 @@ Contratos derivados do [enunciado §9](challenge.md#9-api-http). Regras de negó
 | `GET /wagering/transactions/:transactionId`                               | 200, transação externa; 404 ausente ou OPENING interno                                         |
 | `GET /providers/:providerId/wagering/transactions/:externalTransactionId` | 200, transação externa; 404 ausente                                                            |
 | `GET /health/live`                                                        | 200 `{ "status": "ok" }`, sem consulta ao banco                                                |
-| `GET /health/ready`                                                       | 503 nesta etapa: verifica PostgreSQL, mas SQS ainda não foi implementado                       |
+| `GET /health/ready`                                                       | 200 quando PostgreSQL e filas SQS estão disponíveis/configuradas; 503 caso contrário           |
 
 Os códigos HTTP são escolhas locais autorizadas pela Task 08; o enunciado exige distinguir as categorias, sem prescrever números. Uma rejeição persistida de negócio retorna resultado Wagering em 422, com transactionId/failureCode, e tem replay. Payload estrutural inválido retorna erro 400 sem criar transação de rejeição. PENDÊNCIAS não são reprocessadas por novo envio HTTP.
 
 Health é aberto. Autenticação foi omitida nesta etapa, conforme escopo: `NoAuthGuard` no bootstrap é o ponto explícito de substituição por integração com IdP externo/OIDC. Não há usuários/senhas ou autenticação artesanal. Uma futura implementação deve preservar health aberto e verificar identidade do provider; validar o texto providerId não autentica seu emissor.
 
-Readiness retorna, por exemplo, `503 { "status": "not_ready", "checks": { "postgres": "up", "sqs": "not_configured" } }`. Falha no banco muda postgres para down. Não existe readiness completo ou resposta 200 enquanto SQS estiver ausente; liveness permanece disponível após falha do banco. Startup ainda requer PostgreSQL acessível.
+Sem SQS configurado, readiness retorna, por exemplo, `503 { "status": "not_ready", "checks": { "postgres": "up", "sqs": "not_configured" } }`. Falha no banco muda postgres para down. Na Task 09, SQS configurado é verificado por GetQueueAttributes da origem/DLQ, incluindo FIFO/redrive/permissão; tudo saudável retorna 200 ready. SQS ausente/indisponível retorna 503; liveness permanece disponível após falha do banco. Startup ainda requer PostgreSQL acessível.
 
 ## Entrada e validação
 
@@ -133,11 +133,11 @@ curl -sS "$BASE/wallets/$WALLET_ID/ledger?limit=50"
 curl -sS "$BASE/providers/provider-a/wagering/transactions/$TX"
 curl -sS -X POST "$BASE/wallets/$WALLET_ID/reconciliation"
 curl -i "$BASE/health/live"
-curl -i "$BASE/health/ready" # 503: SQS não configurado nesta etapa.
+curl -i "$BASE/health/ready" # 200 com PostgreSQL/SQS saudáveis; 503 se ausentes/indisponíveis.
 ```
 
 ## Evidências e limites
 
 `bun test test/wallet-use-cases.test.ts test/http-input.test.ts` cobre aplicação e validação. `bun test test/http-api.test.ts` usa Nest e PostgreSQL descartável reais, abertura/falhas/reversões/paginação/erros/replay/Outbox/reconciliação. `bun test test/http-concurrency.test.ts` usa três servidores Bun independentes, barreiras transacionais e observação de espera SQL: 100/80/80, 50 duplicatas, wallets distintas, abertura concorrente, snapshot e perda da resposta após commit. A suíte completa mantém os crashes anteriores e regressões financeiras da Task 07. [Relatório](task08-http-report.md).
 
-Nenhum SQS/LocalStack, Inbox, publisher, worker, DLQ ou retry foi implementado. Outbox permanece PENDING. Pendências Wagering não evoluem sem o futuro worker; não se anuncia entrega exactly-once ou readiness completo.
+A Task 09 entrega [SQS/LocalStack, Inbox, consumer, ACK/DLQ e retry de entrada](sqs-consumer.md), com readiness real. Publisher e worker continuam futuros; Outbox permanece PENDING. Pendências Wagering não evoluem sem o futuro worker. Não se anuncia entrega exactly-once.
