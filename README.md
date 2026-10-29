@@ -18,26 +18,28 @@ bun run dev
 
 `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER` e `POSTGRES_PASSWORD` são obrigatórias na aplicação/CLI; `POSTGRES_POOL_MAX` é opcional (10). Compose publica a porta configurada somente em 127.0.0.1, com volume persistente e healthcheck. Não reutilize o banco da aplicação para testes: a suíte cria projetos Compose e volumes descartáveis próprios, em portas dinâmicas.
 
-| Comando                   | Função                                                                 |
-| ------------------------- | ---------------------------------------------------------------------- |
-| `bun run dev`             | Bun com watch sobre o TypeScript                                       |
-| `bun run build`           | Limpa dist e executa tsc com Bun                                       |
-| `bun run start`           | Bun executando dist/main.api.js                                        |
-| `bun run consumer`        | Consumer independente sobre TypeScript                                 |
-| `bun run publisher`       | Publisher independente sobre TypeScript                                |
-| `bun run publisher:start` | Publisher compilado em dist/main.publisher.js                          |
-| `bun run consumer:start`  | Consumer compilado em dist/main.consumer.js                            |
-| `bun run sqs:provision`   | Provisionamento explícito FIFO/DLQ local                               |
-| `bun run typecheck`       | TypeScript sem emissão, incluindo testes e build.ts                    |
-| `bun run lint`            | ESLint sem warnings e análise arquitetural                             |
-| `bun run lint:fix`        | Correções do ESLint e análise arquitetural                             |
-| `bun run architecture`    | Grafo de dependências da aplicação                                     |
-| `bun run format:check`    | Verificação do Prettier                                                |
-| `bun run format`          | Formatação do Prettier                                                 |
-| `bun run test`            | Bun Test, PostgreSQL/LocalStack reais, Docker, HTTP e testes negativos |
-| `bun run db:migrate`      | Aplica migrations versionadas                                          |
-| `bun run db:rollback`     | Reverte a última migration; recusa ledger com lançamentos              |
-| `bun run db:status`       | Lista migrations executadas e pendentes                                |
+| Comando                        | Função                                                                 |
+| ------------------------------ | ---------------------------------------------------------------------- |
+| `bun run dev`                  | Bun com watch sobre o TypeScript                                       |
+| `bun run build`                | Limpa dist e executa tsc com Bun                                       |
+| `bun run start`                | Bun executando dist/main.api.js                                        |
+| `bun run consumer`             | Consumer independente sobre TypeScript                                 |
+| `bun run publisher`            | Publisher independente sobre TypeScript                                |
+| `bun run pending:worker`       | Worker SQL independente de referências                                 |
+| `bun run pending:worker:start` | Worker compilado em dist/main.pending-worker.js                        |
+| `bun run publisher:start`      | Publisher compilado em dist/main.publisher.js                          |
+| `bun run consumer:start`       | Consumer compilado em dist/main.consumer.js                            |
+| `bun run sqs:provision`        | Provisionamento explícito FIFO/DLQ local                               |
+| `bun run typecheck`            | TypeScript sem emissão, incluindo testes e build.ts                    |
+| `bun run lint`                 | ESLint sem warnings e análise arquitetural                             |
+| `bun run lint:fix`             | Correções do ESLint e análise arquitetural                             |
+| `bun run architecture`         | Grafo de dependências da aplicação                                     |
+| `bun run format:check`         | Verificação do Prettier                                                |
+| `bun run format`               | Formatação do Prettier                                                 |
+| `bun run test`                 | Bun Test, PostgreSQL/LocalStack reais, Docker, HTTP e testes negativos |
+| `bun run db:migrate`           | Aplica migrations versionadas                                          |
+| `bun run db:rollback`          | Reverte a última migration; recusa ledger com lançamentos              |
+| `bun run db:status`            | Lista migrations executadas e pendentes                                |
 
 Produção local: `bun run build` seguido de `bun run start`.
 
@@ -60,6 +62,7 @@ src/
   main.api.ts
   main.consumer.ts
   main.publisher.ts
+  main.pending-worker.ts
   bootstrap/                    # módulo Nest e fábrica HTTP
   modules/
     financial/{public,domain,application,adapters}/
@@ -71,11 +74,11 @@ src/
 test/                           # integração e fronteiras
 ```
 
-Pastas vazias são preservadas por `.gitkeep`. Persistência das seis tabelas, núcleo Financial, domínio Wagering, portas, mappers, adapters, UnitOfWork, ProcessWagerUseCase e endpoints HTTP estão implementados. Abertura atômica versão 1 e reconciliação exata estão em [Financial](docs/domain/financial.md); processamento, entrada/saída, hash, replay e políticas em [Wagering](docs/domain/wagering.md). SQS FIFO, Inbox transacional e consumer independente estão implementados. Publisher recuperável está implementado na Task 10; worker de referências continua futuro. A composição `createProcessWagerUseCase(orm)` fica em `src/bootstrap/wagering.ts`; ApiModule injeta o mesmo caso de uso sobre a mesma UnitOfWork.
+Pastas vazias são preservadas por `.gitkeep`. Persistência das seis tabelas, núcleo Financial, domínio Wagering, portas, mappers, adapters, UnitOfWork, ProcessWagerUseCase e endpoints HTTP estão implementados. Abertura atômica versão 1 e reconciliação exata estão em [Financial](docs/domain/financial.md); processamento, entrada/saída, hash, replay e políticas em [Wagering](docs/domain/wagering.md). SQS FIFO, Inbox transacional e consumer independente estão implementados. Publisher recuperável está implementado na Task 10; worker de referências está entregue na [Task 11](docs/pending-reference-worker.md). A composição `createProcessWagerUseCase(orm)` fica em `src/bootstrap/wagering.ts`; ApiModule injeta o mesmo caso de uso sobre a mesma UnitOfWork.
 
 Task 08: `bun test test/http-api.test.ts` testa Nest/PostgreSQL reais; `bun test test/http-concurrency.test.ts` inicia três processos API independentes e usa barreiras SQL para concorrência, duplicatas e snapshot. `bun test test/wallet-use-cases.test.ts test/http-input.test.ts` cobre aplicação/validação. [Relatório e limitações](docs/task08-http-report.md). Reconciliação usa REPEATABLE READ READ ONLY e nunca ajusta saldo. A Task 10 acrescenta publicação recuperável da Outbox. Autenticação e exportação de métricas não estão implementadas.
 
-Task 10: [operação do publisher](docs/outbox-publisher.md), [contrato](docs/domain/messaging.md#task-10--publicação-recuperável) e [relatório](docs/task10-outbox-report.md). Após migrations/provisionamento, execute `bun run publisher` em outro terminal; `bun run publisher:start` usa o build. Processo Nest sem HTTP, pool/SDK próprios, saída `wager-events.fifo` distinta dos comandos, claims SQL/leases/fencing e retries duráveis. Sem promessa de ordem de commit na saída nem exactly-once delivery. `bun test test/publisher.test.ts test/publisher-persistence.test.ts test/publisher-pipeline.test.ts test/publisher-recovery.test.ts test/publisher-docker.test.ts` cobre contratos, SQL/LocalStack reais, três publishers, crashes, publicação incerta, Docker e SIGTERM. Todos integram `bun run test`. Worker de referências permanece futuro.
+Task 10: [operação do publisher](docs/outbox-publisher.md), [contrato](docs/domain/messaging.md#task-10--publicação-recuperável) e [relatório](docs/task10-outbox-report.md). Após migrations/provisionamento, execute `bun run publisher` em outro terminal; `bun run publisher:start` usa o build. Processo Nest sem HTTP, pool/SDK próprios, saída `wager-events.fifo` distinta dos comandos, claims SQL/leases/fencing e retries duráveis. Sem promessa de ordem de commit na saída nem exactly-once delivery. `bun test test/publisher.test.ts test/publisher-persistence.test.ts test/publisher-pipeline.test.ts test/publisher-recovery.test.ts test/publisher-docker.test.ts` cobre contratos, SQL/LocalStack reais, três publishers, crashes, publicação incerta, Docker e SIGTERM. Todos integram `bun run test`. Worker de referências está entregue na Task 11 abaixo.
 
 Task 09: [operação e envio FIFO](docs/sqs-consumer.md), [contrato Inbox/ACK](docs/domain/messaging.md#task-09--protocolo-de-recepção-implementado) e [relatório](docs/task09-sqs-report.md). `bun test test/sqs-consumer.test.ts` usa três consumers Bun com pools próprios, PostgreSQL e LocalStack descartáveis; inclui concorrência, 50 duplicatas, HTTP ↔ SQS, crash/redelivery, DLQ e indisponibilidade. `bun test test/consumer-docker.test.ts` faz Docker build/smoke e SIGTERM real durante espera por lock, incluindo prazo excedido e recuperação. Ambos integram a suíte normal. Nenhuma migration nova; Outbox continua PENDING e referências pendentes aguardam o futuro worker. Para a imagem com SQS, use os overrides de endpoint/URLs da [operação Docker](docs/sqs-consumer.md#docker-e-sinais).
 
@@ -83,7 +86,7 @@ Task 06: `bun test test/process-wager.test.ts test/wagering-persistence.test.ts 
 
 Task 07: `bun test test/wager-events.test.ts test/process-wager.test.ts test/process-wager-persistence.test.ts` valida quatro eventos v1 e inserção na Outbox existente, atomicamente com efeitos e idempotência. Replay não gera eventos. Inclui falhas SQL, precisão JSONB, 50 duplicatas em três processos e leitura durável após crash. [Contrato e matriz](docs/domain/messaging.md#task-07--protocolo-v1-implementado), [relatório e validações](docs/task07-outbox-report.md). No escopo da Task 07 não houve SQS/worker; a Task 09 acrescenta entrada SQS. A Task 10 implementa o publisher; na Task 07 os registros permaneciam PENDING. Nenhuma migration nova nesta tarefa.
 
-Integração dos adapters: `bun test test/financial-persistence.test.ts`. Usa outro PostgreSQL descartável e testa precisão, ledger, commit/rollback, contextos/pool e locks com três processos Bun independentes. Não substitui os cenários do processador/SQS nem a futura recuperação de workers.
+Integração dos adapters: `bun test test/financial-persistence.test.ts`. Usa outro PostgreSQL descartável e testa precisão, ledger, commit/rollback, contextos/pool e locks com três processos Bun independentes. Não substitui os cenários do processador/SQS nem os cenários completos do worker, cobertos pela Task 11.
 
 Unidade financeira sem PostgreSQL/Nest/Docker: `bun test test/money.test.ts test/wallet.test.ts test/wallet-ledger-entry.test.ts`.
 
@@ -115,3 +118,5 @@ Bun Test foi escolhido sem Jest ou adaptadores adicionais: a compatibilidade é 
 Limites: verificações estáticas não provam ausência semântica de regra de negócio em um método. Controllers e contratos públicos ainda precisam de revisão humana. Imports dinâmicos calculados são proibidos pelo ESLint para manter o grafo verificável; o decorator Module deve manter seu nome, e tanto `@Module` quanto `@Nest.Module` são verificados. Ao criar novos módulos, ampliar a lista de módulos em `.dependency-cruiser.cjs` e os testes correspondentes. Próximos passos de domínio e infraestrutura dependem de definições futuras; não fazem parte deste bootstrap.
 
 Referências técnicas: [TypeScript decorators](https://www.typescriptlang.org/docs/handbook/decorators), [typescript-eslint Project Service](https://typescript-eslint.io/blog/project-service/) e [dependency-cruiser rules](https://github.com/sverweij/dependency-cruiser/blob/main/doc/rules-reference.md).
+
+Task 11: [operação do Pending Reference Worker](docs/pending-reference-worker.md), [contrato de resolução](docs/domain/wagering.md#task-11--resolução-de-referências) e [relatório](docs/task11-pending-report.md). Após migrations, execute `bun run pending:worker` em processo separado; não exige SQS nem HTTP. Reavalia PENDING/PENDING_REFERENCE com claims/leases/fencing, backoff e TTL configurável de 24h; resolve a operação existente pelo motor compartilhado e atualiza idempotência/ledger/Outbox no mesmo commit. Os cinco arquivos `test/pending-*.test.ts` integram `bun run test`: PostgreSQL/LocalStack reais, três processos, crashes, replay concorrente, Docker e SIGTERM/deadline.
