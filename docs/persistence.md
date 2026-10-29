@@ -2,7 +2,7 @@
 
 Decisão e ambiguidades: [ARCHITECTURE.md](../ARCHITECTURE.md#fundação-de-persistência--decisão-aprovada-nesta-tarefa). Requisitos: §§4–6, 7.1, 9–11 e 13 do [enunciado imutável](challenge.md), [Financial](domain/financial.md), [Wagering](domain/wagering.md) e [Messaging](domain/messaging.md).
 
-Entregue: armazenamento, integridade estrutural, [integração financeira transacional](#integração-financeira-e-unitofwork), [processamento atômico da Task 06](#task-06--processamento-atômico) e [inserção Outbox da Task 07](#task-07--outbox-transacional). Os modelos não são entidades de domínio. A Task 09 acrescenta consumer e Inbox transacional; publisher e workers não estão implementados.
+Entregue: armazenamento, integridade estrutural, [integração financeira transacional](#integração-financeira-e-unitofwork), [processamento atômico da Task 06](#task-06--processamento-atômico) e [inserção Outbox da Task 07](#task-07--outbox-transacional). Os modelos não são entidades de domínio. A Task 09 acrescenta consumer e Inbox transacional; publisher recuperável está entregue na Task 10; worker de referências permanece futuro.
 
 ## Versões e execução
 
@@ -30,7 +30,7 @@ Compatibilidade do núcleo financeiro: Money não negativo serializa strings can
 | `wager_transactions`    | `provider_id text?`, `external_transaction_id text?`, `idempotency_key text?`, `payload_hash text?`, `wallet_id uuid`, `player_id text`, `round_id text?`, `game_id text?`, `kind text`, `status text = PENDING`, `amount money`, `currency varchar(3)`, `reference_external_transaction_id text?`, `reference_transaction_id uuid?`, `failure_code text?`, `attempts integer = 0`, `next_attempt_at timestamptz?`, `last_attempt_at timestamptz?`, `last_error text?`, `created_at timestamptz`, `updated_at timestamptz`, `processed_at timestamptz?` |
 | `wallet_ledger_entries` | `wallet_id uuid`, `transaction_id uuid`, `direction text`, `currency varchar(3)`, `amount money`, `balance_before money`, `balance_after money`, `created_at timestamptz`                                                                                                                                                                                                                                                                                                                                                                               |
 | `inbox_messages`        | `consumer_name text`, `message_id text`, `payload_hash text`, `status text = RECEIVED`, `attempts integer = 0`, `last_error text?`, `received_at timestamptz`, `updated_at timestamptz`, `processed_at timestamptz?`                                                                                                                                                                                                                                                                                                                                    |
-| `outbox_messages`       | `event_id uuid`, `aggregate_id uuid`, `event_type text`, `event_version integer`, `correlation_id text`, `causation_id text?`, `payload jsonb`, `status text = PENDING`, `attempts integer = 0`, `last_error text?`, `occurred_at timestamptz`, `created_at timestamptz`, `next_attempt_at timestamptz`, `published_at timestamptz?`                                                                                                                                                                                                                    |
+| `outbox_messages`       | `event_id uuid`, `aggregate_id uuid`, `event_type text`, `event_version integer`, `correlation_id text`, `causation_id text?`, `payload jsonb`, `status text = PENDING`, `attempts integer = 0`, `last_error text?`, `occurred_at timestamptz`, `created_at timestamptz`, `next_attempt_at timestamptz`, `published_at timestamptz?`, `claim_token uuid?`, `claimed_by text?`, `claimed_until timestamptz?`                                                                                                                                             |
 | `idempotency_records`   | `scope text`, `idempotency_key text`, `payload_hash text`, `status text = IN_PROGRESS`, `transaction_id uuid?`, `original_result jsonb?`, `created_at timestamptz`, `updated_at timestamptz`                                                                                                                                                                                                                                                                                                                                                            |
 
 ## Constraints e foreign keys
@@ -93,7 +93,44 @@ O teste de lock mantém `PESSIMISTIC_WRITE` numa wallet e, após confirmar a aqu
 
 `bun test test/api.test.ts` usa outro container isolado e comprova inicialização Nest, HTTP liveness real e fechamento do pool. A suíte normal `bun run test` inclui esses testes e os testes negativos de arquitetura, inclusive rejeição de imports ORM em domínio/aplicação.
 
-Pendências atuais: backoff/TTL, claims/leases de workers, atualização condicionada de resultados pendentes pelo worker, publishers concorrentes e recuperação de publicação. Inbox e crash/ACK estão cobertos na Task 09. As evidências históricas dos adapters abaixo não substituem as do processador completo nas Tasks 06 e 07.
+Pendências atuais: backoff/TTL, claims de referências e atualização condicionada de resultados pendentes pelo worker. Publicação concorrente e recuperação estão entregues na Task 10. Inbox e crash/ACK estão cobertos na Task 09. As evidências históricas dos adapters abaixo não substituem as do processador completo nas Tasks 06 e 07.
+
+## Task 10 — aquisição e confirmação da Outbox
+
+[Migration202610290001](../src/platform/persistence/migrations/Migration202610290001.ts)
+acrescenta claim_token UUID, claimed_by texto e claimed_until timestamptz, todos
+null por default. CHECK exige ausência conjunta ou trio completo com owner não
+vazio, expiração finita e estado PENDING. Legados PENDING/PUBLISHED continuam
+válidos. Trigger adicional protege id/metadados/envelope/ocorrência/criação e
+impede qualquer mudança em PUBLISHED. O trigger original de event_id permanece.
+Down remove somente novos campos/constraint/trigger; preserva eventos e histórico,
+mas perde reservas técnicas, portanto exige parar publishers antes da reversão.
+Migrations históricas não foram editadas. Prefira correção forward em produção.
+
+[OutboxStore](../src/platform/messaging/outbox.ts) é porta técnica independente
+com claim/published/retry/diagnostics. O [adapter](../src/platform/persistence/mikro-orm-outbox-store.ts)
+usando MikroORM fica em Platform, sem imports de negócio. Ele abre uma transação
+**técnica** curta por aquisição; não usa nem prolonga TransactionSession financeira.
+CTE SELECT FOR UPDATE SKIP LOCKED seleciona PENDING/due/sem lease válido e UPDATE
+reserva lote/token novo por linha, incrementando attempts. Commit antecede SQS.
+Predicado next_attempt_at <= statement_timestamp() fornece Index Cond no índice
+parcial existente `(next_attempt_at, created_at, id)`; relógio volátil não é usado
+como limite de range. Ordem da seleção é agendamento/criação/ID, sem representar
+ordem de commit financeiro ou impor ordem de envio.
+
+published/retry são UPDATEs atômicos fora da transação financeira, com eventId,
+token, PENDING e claimed_until > clock_timestamp(). SQL decide tempo de lease;
+dono antigo não confirma/reagenda/libera claim novo. Atualização zero consulta
+estado e devolve diagnóstico explícito. Confirmação preenche published_at, limpa
+claim/last_error e preserva fato. Retry escreve next_attempt_at/last_error sanitizado
+e limpa somente claim válido. Falha SQL deixa lease recuperável. attempts conta
+claims confirmados, sem incremento em consultas. Sem DELETE ou estado terminal.
+[Contrato e política](domain/messaging.md#task-10--publicação-recuperável).
+
+Testes reais: [persistência/EXPLAIN/migrations](../test/publisher-persistence.test.ts),
+[três processos e falhas SQL/SQS](../test/publisher-sqs.test.ts),
+[Docker/SIGTERM](../test/publisher-docker.test.ts). Não alteram wallet, ledger,
+idempotência ou Inbox. Fonte de resultados: [relatório](task10-outbox-report.md).
 
 ## Task 09 — Inbox transacional
 
@@ -217,7 +254,7 @@ Histórico da tarefa Financial Persistence Integration & Transactional UnitOfWor
 
 `execute<T>(work: (context) => Promise<T>): Promise<T>` abre uma transação READ COMMITTED, entrega o contexto e só resolve após commit. Rejeição do callback ou erro SQL não tratado causa rollback e propaga o erro original. Colaboradores devem receber o contexto e aguardar todas as operações; uma nova chamada a `execute` é outra transação, inclusive dentro de um callback. Não compartilhar instâncias de domínio entre execuções, usar repositórios depois do callback ou capturar falha SQL para continuar uma transação abortada. Não há retries automáticos. Comportamento transacional segue a [API oficial MikroORM](https://mikro-orm.io/docs/transactions), exercitada na versão instalada.
 
-As escritas são parametrizadas pelo ORM, executadas imediatamente no EntityManager transacional. Nenhum repositório abre transação ou faz commit/flush independente. Uma falha de FK/UNIQUE/CHECK mantém código PostgreSQL reconhecível pelo chamador. O contexto atual contém idempotência, Wagering, Outbox e Inbox opcional, todos vinculados à mesma TransactionSession.
+As escritas são parametrizadas pelo ORM, executadas imediatamente no EntityManager transacional. Nenhum repositório do contexto financeiro abre transação ou faz commit/flush independente. Uma falha de FK/UNIQUE/CHECK mantém código PostgreSQL reconhecível pelo chamador. O contexto atual contém idempotência, Wagering, Outbox e Inbox opcional, todos vinculados à mesma TransactionSession.
 
 Ordem de criação: **wallet → transação financeira → ledger**, por causa das FKs imediatas. Em wallet existente, adquirir lock antes de qualquer cálculo sobre saldo; atualizar wallet e inserir a transação antes de inserir o ledger. Erro posterior reverte todos os efeitos. Os testes também escrevem transação/ledger antes de uma atualização que falha, para comprovar rollback dessa ordem. UnitOfWork garante a fronteira atômica, não exige efeitos de negócio: cabe ao futuro coordenador associar cada BalanceChange ao registro e ledger corretos.
 

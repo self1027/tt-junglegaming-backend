@@ -4,7 +4,7 @@
 
 O [enunciado](docs/challenge.md) é a fonte imutável dos requisitos. O [índice de requisitos](docs/requirements.md) aponta seus contratos e critérios. Aqui ficam decisões estruturais; regras financeiras, operações e transporte ficam em [docs/domain](docs/domain/). **Aprovada** significa determinada pela tarefa de arquitetura/bootstrap; **obrigatória** vem do enunciado; **pendente/proposta** não autoriza implementação como contrato fechado.
 
-Implementado: API NestJS em [src/main.api.ts](src/main.api.ts), composição em [src/bootstrap](src/bootstrap/), [contratos HTTP](docs/http-api.md), abertura atômica/consultas/reconciliação, fundação PostgreSQL/MikroORM, domínio [Financial](docs/domain/financial.md), domínio [Wagering](docs/domain/wagering.md) e ProcessWagerUseCase com idempotência persistente, processamento financeiro atômico e eventos tipados na Outbox. Liveness independe das dependências; readiness verifica PostgreSQL e SQS/FIFO/redrive/DLQ. A Task 09 implementa Inbox transacional e consumer independente em [main.consumer.ts](src/main.consumer.ts). Publicação e worker permanecem futuros. [Compose](compose.yaml) oferece PostgreSQL e LocalStack com perfil sqs. [Operação](docs/sqs-consumer.md).
+Implementado: API NestJS em [src/main.api.ts](src/main.api.ts), composição em [src/bootstrap](src/bootstrap/), [contratos HTTP](docs/http-api.md), abertura atômica/consultas/reconciliação, fundação PostgreSQL/MikroORM, domínio [Financial](docs/domain/financial.md), domínio [Wagering](docs/domain/wagering.md) e ProcessWagerUseCase com idempotência persistente, processamento financeiro atômico e eventos tipados na Outbox. Liveness independe das dependências; readiness verifica PostgreSQL e SQS/FIFO/redrive/DLQ. A Task 09 implementa Inbox transacional e consumer independente em [main.consumer.ts](src/main.consumer.ts). A Task 10 implementa publisher independente em [main.publisher.ts](src/main.publisher.ts); worker de referências permanece futuro. [Compose](compose.yaml) oferece PostgreSQL e LocalStack com perfil sqs. [Operação](docs/sqs-consumer.md).
 
 ## Decisões aprovadas
 
@@ -22,7 +22,7 @@ Implementado: API NestJS em [src/main.api.ts](src/main.api.ts), composição em 
 
 Cada módulo contém `domain`, `application`, `public` e `adapters`. `public` expõe contratos sem importar adapters. Domain não depende de frameworks; application depende de contratos, não implementações. Adapters implementam portas da aplicação. Financial não depende de Wagering; Wagering usa somente contratos públicos de Financial. Nenhum módulo acessa detalhes internos de outro. Platform não importa módulos; adapters dos módulos podem implementar suas portas usando recursos técnicos de Platform. Bootstrap compõe as implementações concretas; regras de negócio ficam fora dele e dos controllers.
 
-As regras atuais em [.dependency-cruiser.cjs](.dependency-cruiser.cjs) e [eslint.config.mjs](eslint.config.mjs) reforçam essas fronteiras, inclusive imports de tipos e ciclos. As camadas internas atualmente também vedam imports de pacotes externos: isso precisa ser considerado ao propor uma biblioteca decimal, sem relaxar a regra silenciosamente. Somente `main.api.ts` e `main.consumer.ts` podem importar bootstrap como entrypoints; a exceção adicional é localizada e testada. AWS SDK permanece na infraestrutura, e guardas negativos impedem commit próprio de Inbox e débito/crédito no consumer.
+As regras atuais em [.dependency-cruiser.cjs](.dependency-cruiser.cjs) e [eslint.config.mjs](eslint.config.mjs) reforçam essas fronteiras, inclusive imports de tipos e ciclos. As camadas internas atualmente também vedam imports de pacotes externos: isso precisa ser considerado ao propor uma biblioteca decimal, sem relaxar a regra silenciosamente. Somente `main.api.ts`, `main.consumer.ts` e `main.publisher.ts` podem importar bootstrap como entrypoints; a exceção adicional é localizada e testada. AWS SDK permanece na infraestrutura, e guardas negativos impedem commit próprio de Inbox e débito/crédito no consumer.
 
 ## Unidade transacional
 
@@ -71,11 +71,12 @@ Canonicalização, scope, zero, referências pendentes, failure codes e polític
 
 ## Processos e composição
 
-| Entrypoint em src  | Responsabilidade                                                      | Situação                                    |
-| ------------------ | --------------------------------------------------------------------- | ------------------------------------------- |
-| `main.api.ts`      | HTTP e resposta síncrona do caso de uso, inclusive resultado pendente | Implementado; readiness real PostgreSQL/SQS |
-| `main.consumer.ts` | Receber SQS, Inbox, delegar processamento e ACK após commit           | Implementado                                |
-| `main.worker.ts`   | Executar Outbox Publisher e Pending Reference Processor               | Não implementado                            |
+| Entrypoint em src   | Responsabilidade                                                      | Situação                                    |
+| ------------------- | --------------------------------------------------------------------- | ------------------------------------------- |
+| `main.api.ts`       | HTTP e resposta síncrona do caso de uso, inclusive resultado pendente | Implementado; readiness real PostgreSQL/SQS |
+| `main.consumer.ts`  | Receber SQS, Inbox, delegar processamento e ACK após commit           | Implementado                                |
+| `main.publisher.ts` | Publicar Outbox confirmada com claims/lease/fencing                   | Implementado na Task 10                     |
+| `main.worker.ts`    | Executar Pending Reference Processor                                  | Não implementado                            |
 
 Outbox Publisher publica eventos; Pending Reference Processor reprocessa referências ausentes. São componentes distintos, mesmo no mesmo processo. HTTP e SQS chamam o mesmo `ProcessWagerUseCase` e compartilham a aplicação financeira, sem fluxo de saldo paralelo. Ciclo de vida deve permitir concluir mensagens ou devolver visibilidade no SIGTERM (§10). Não são necessários placeholders executáveis nesta etapa.
 
@@ -83,7 +84,42 @@ Outbox Publisher publica eventos; Pending Reference Processor reprocessa referê
 
 SQS FIFO de entrada, Inbox persistente e Outbox transacional são obrigatórios (§§6.5, 10–11). ACK somente depois do commit; publicação assíncrona por worker depois do commit. Entrega at-least-once permite republicação com identificador estável do evento; consumidores precisam tolerar duplicatas. Falha após commit não perde evento; outra instância recupera o trabalho. DLQ, backoff, tentativas limitadas e recuperação pertencem ao contrato de [Messaging](docs/domain/messaging.md).
 
-Idempotência de negócio identifica operação e payload e preserva resultado original; deduplicação de mensagem usa `(consumerName, messageId)` do envelope. Uma não substitui a outra. A coordenação de negócio, Inbox e inserção Outbox estão entregues; protocolo de publicação permanece pendente. ConsumerModule cria application context Nest sem listener HTTP, com UnitOfWork e caso de uso compartilhados; Platform não importa Wagering. Uma mensagem por ReceiveMessage, com pollers concorrentes, protege sucessoras de uma mensagem inválida contra gasto de tentativas sem processamento.
+Idempotência de negócio identifica operação e payload e preserva resultado original; deduplicação de mensagem usa `(consumerName, messageId)` do envelope. Uma não substitui a outra. A coordenação de negócio, Inbox e inserção Outbox estão entregues; protocolo de publicação está implementado na Task 10. ConsumerModule cria application context Nest sem listener HTTP, com UnitOfWork e caso de uso compartilhados; Platform não importa Wagering. Uma mensagem por ReceiveMessage, com pollers concorrentes, protege sucessoras de uma mensagem inválida contra gasto de tentativas sem processamento.
+
+## Task 10 — publisher independente
+
+[PublisherModule](src/bootstrap/publisher.module.ts) cria contexto Nest sem HTTP,
+com pool PostgreSQL e cliente SDK próprios. Reutiliza configuração de persistência
+e fábrica de cliente SQS. [OutboxPublisher](src/platform/messaging/outbox-publisher.ts)
+depende somente de portas técnicas EventPublisher/OutboxStore, sem importar
+módulos. O adapter SQS de Wagering conhece os contratos públicos dos quatro eventos;
+Platform não importa negócios. Financial e ProcessWagerUseCase não mudam.
+
+[Migration202610290001](src/platform/persistence/migrations/Migration202610290001.ts)
+acrescenta token/owner/lease com CHECK coerente e proteção dos fatos históricos.
+A aquisição SQL é uma unidade técnica própria e curta, distinta da UnitOfWork
+financeira: SELECT FOR UPDATE SKIP LOCKED + UPDATE de claims + commit. Rede SQS
+ocorre após liberar transação/locks. Finalização/retry são UPDATEs atômicos com
+fencing por token e validade do lease; o próprio PostgreSQL é o relógio de autoridade.
+Índice parcial existente limita seleção aos eventos vencidos, usando predicado
+indexável por statement_timestamp. Lease não é renovado; orçamento de envio/SQL
+é limitado e validado. Batch <= concorrência evita claims parados em fila local.
+
+Fila wager-events.fifo separa saída de comandos. Envelope completo histórico com
+version/data é validado e serializado deterministicamente; dedup ID = eventId,
+grupo = data.walletId. Nenhuma ordem de commit na saída é prometida: FIFO ordena
+chegadas ao grupo e as invariantes financeiras continuam protegidas no banco.
+Sem transação distribuída, exactly-once ou sequência global. Aceite SQS pode ser
+repetido após crash antes da marcação SQL, preservando o mesmo fato.
+
+Retry ilimitado e backoff limitado preservam durabilidade e recuperabilidade,
+inclusive para erros permanentes observáveis. Claims confirmados contam attempts.
+Shutdown impede novos envios após parada da aquisição e drena os já iniciados;
+prazo excedido permite recuperação por lease. Diagnósticos SQL/SQS/loop e contadores
+locais não alteram health da API. O Compose continua fornecendo infraestrutura;
+processos de aplicação seguem o padrão de execução separado já usado pelo consumer.
+[Operação e testes](docs/outbox-publisher.md). Pending Reference Worker permanece
+separado e não implementado.
 
 ## Requisitos obrigatórios e extensões opcionais
 
@@ -102,15 +138,15 @@ Nenhuma alternativa abaixo está aprovada. Registre decisão, justificativa, con
 | Locks               | Política futura de timeout/retries e tratamento dos conflitos/deadlocks propagados                                   |
 | Unidade de trabalho | Inbox entregue na Task 09; inserção Outbox entregue na Task 07                                                       |
 | Idempotência        | Atualização condicionada de resultado não terminal pelo futuro worker; hash/scope/replay já definidos na Task 06     |
-| Inbox/Outbox        | Publishers concorrentes e recuperação de publicação incerta; claim Inbox SQL entregue                                |
+| Inbox/Outbox        | Claims/lease/fencing e publicação incerta entregues na Task 10; referências pendentes                                |
 | Retries/referências | Backoff exponencial obrigatório para referências; parâmetros/limites, aquisição concorrente e classificação de erros |
 | TTL de referências  | Definir tentativas ou TTL e justificar; esgotamento rejeita e emite evento                                           |
-| Filas de eventos    | Destinos, configuração FIFO/deduplicação, retenção e recuperação; entrada/DLQ já têm nomes no contrato               |
-| Contratos externos  | Destinos de eventos publicados; entrada SQS/readiness entregues na Task 09                                           |
+| Filas de eventos    | Saída wager-events.fifo e protocolo entregues na Task 10; consumidor downstream futuro                               |
+| Contratos externos  | Contratos v1/saída entregues; evolução e consumidores downstream futuros                                             |
 | Falhas permanentes  | Classificação explícita para FAILED e coordenação com DLQ; falhas transitórias propagam rollback                     |
 | Autenticação        | Integração futura com IdP; omissão e ponto de extensão registrados na Task 08                                        |
 
-Locks dos adapters e processamento financeiro completo são exercitados em três processos independentes na Task 06; entrada SQS/ACK/DLQ é exercitada na Task 09; publicação continua futura. Não há prazo ou limite comercial de dinheiro definido.
+Locks dos adapters e processamento financeiro completo são exercitados em três processos independentes na Task 06; entrada SQS/ACK/DLQ é exercitada na Task 09; publicação e recuperação entregues na Task 10. Não há prazo ou limite comercial de dinheiro definido.
 
 ## Núcleo financeiro — decisão autorizada pela tarefa Financial Domain Core
 
@@ -149,4 +185,4 @@ Decisões tomadas **antes da migration inicial**:
 | Idempotência           | scope/key únicos; payload_hash opaco (algoritmo pendente); estados técnicos IN_PROGRESS/COMPLETED. JSONB original_result guarda a resposta original completa, inclusive saldo histórico e metadados de resposta quando definidos. COMPLETED exige resultado e transação; FK nullable permite reserva ainda sem transação. Não decide quando completar resultado pendente/rejeitado/falho e não implementa hash/replay.                                                                                                                                         |
 | Reversão               | down remove estruturas em ordem inversa e recusa execução se o ledger contiver lançamentos; teste usa banco descartável sem ledger confirmado. Não é procedimento para apagar histórico em produção. Com dados financeiros, adotar migration corretiva forward e backup.                                                                                                                                                                                                                                                                                       |
 
-O [schema físico e a matriz de integridade](docs/persistence.md) documentam colunas, índices e limites. A tabela acima registra o desenho da fundação original; as políticas entregues posteriormente estão na seção Task 06 e no contrato Wagering. Retries agendados, TTL e publicação permanecem futuros; entrada SQS/Inbox está entregue na Task 09.
+O [schema físico e a matriz de integridade](docs/persistence.md) documentam colunas, índices e limites. A tabela acima registra o desenho da fundação original; as políticas entregues posteriormente estão na seção Task 06 e no contrato Wagering. Retries/TTL de referências permanecem futuros; publicação entregue na Task 10; entrada SQS/Inbox está entregue na Task 09.

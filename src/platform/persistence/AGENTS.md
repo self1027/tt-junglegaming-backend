@@ -9,3 +9,5 @@ Escopo: mecanismos técnicos de persistência. Consulte a unidade de trabalho e 
 - Use [persistence-change](../../../.agents/skills/persistence-change/SKILL.md); MikroORM/PostgreSQL, schema inicial e UnitOfWork técnico estão implementados. Confira [schema e decisões](../../../docs/persistence.md); o SQL versionado é a fonte de constraints, FKs compostas e triggers. Não gere um diff automático que remova essas garantias. Mappers/adapters financeiros ficam nos módulos; bootstrap os compõe na mesma sessão. Escritas não abrem transação própria; save de wallet exige a instância adquirida sob lock nessa execução.
 
 Exija evidências reais no PostgreSQL quando a garantia depender do banco; mocks não demonstram constraints, locks ou atomicidade.
+
+Exceção técnica explícita: OutboxStore abre transação curta própria para claim com SKIP LOCKED e confirma antes de SendMessage. Não integra nem prolonga a TransactionSession financeira. Finalização/retry são UPDATEs atômicos com token/PENDING/lease válido. [Contrato](../../../docs/persistence.md#task-10--aquisição-e-confirmação-da-outbox).
