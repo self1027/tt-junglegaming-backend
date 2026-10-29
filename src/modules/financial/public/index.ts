@@ -13,6 +13,13 @@ export type {
 	LedgerDirection,
 } from '../domain/balance-change.js';
 export { UNIT_OF_WORK } from './persistence.js';
+export { FinancialApplicationError } from './wallet-api.js';
+export type {
+	CreateWalletCommand,
+	WalletResult,
+	WalletReconciliationResult,
+	ReconciliationDiagnostics,
+} from './wallet-api.js';
 export type {
 	WalletRepository,
 	WalletLedgerRepository,
