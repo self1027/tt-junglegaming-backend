@@ -10,7 +10,10 @@ export class MikroOrmUnitOfWork<Context> {
 		) => Context,
 	) {}
 
-	async execute<T>(work: (context: Context) => Promise<T>): Promise<T> {
+	async execute<T>(
+		work: (context: Context) => Promise<T>,
+		options?: { readonly readOnly: true },
+	): Promise<T> {
 		const fork = this.manager.fork({
 			clear: true,
 			useContext: false,
@@ -18,6 +21,8 @@ export class MikroOrmUnitOfWork<Context> {
 		});
 		return fork.transactional(
 			async em => {
+				if (options?.readOnly === true)
+					await em.execute('set transaction read only');
 				const session = new TransactionSession(em);
 				try {
 					return await work(this.createContext(session));
@@ -26,7 +31,10 @@ export class MikroOrmUnitOfWork<Context> {
 				}
 			},
 			{
-				isolationLevel: IsolationLevel.READ_COMMITTED,
+				isolationLevel:
+					options?.readOnly === true
+						? IsolationLevel.REPEATABLE_READ
+						: IsolationLevel.READ_COMMITTED,
 				propagation: TransactionPropagation.REQUIRES_NEW,
 			},
 		);
