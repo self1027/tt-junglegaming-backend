@@ -3,6 +3,7 @@ import { defineConfig } from '@mikro-orm/postgresql';
 import type { Options } from '@mikro-orm/postgresql';
 import { persistenceEntities } from './models.js';
 import { Migration202610280001 } from './migrations/Migration202610280001.js';
+import { Migration202610280002 } from './migrations/Migration202610280002.js';
 
 function required(env: NodeJS.ProcessEnv, key: string): string {
 	const value = env[key];
@@ -52,7 +53,7 @@ export function persistenceConfig(
 		debug: false,
 		extensions: [Migrator],
 		migrations: {
-			migrationsList: [Migration202610280001],
+			migrationsList: [Migration202610280001, Migration202610280002],
 			transactional: true,
 			allOrNothing: true,
 			disableForeignKeys: false,
