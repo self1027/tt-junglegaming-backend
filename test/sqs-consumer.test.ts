@@ -566,6 +566,8 @@ test('draining consumer commits current work, ACKs it and stops before new work'
 	await first.send('release');
 	await first.wait('acked', message.messageId);
 	expect((await first.wait('closed')).connected).toBe(false);
+	await first.close();
+	await first.close();
 	await balance(wallet.id, '90.00', 1, 2, 2);
 }, 60000);
 

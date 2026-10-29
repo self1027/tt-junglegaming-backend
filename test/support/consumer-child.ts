@@ -84,7 +84,9 @@ export async function startConsumer(
 			await child.exited;
 		},
 		close: async (): Promise<void> => {
-			if (!killed && child.exitCode === null) {
+			// The child closes stdin before its exit status reaches the parent.
+			const closed = events.some(record => record.event === 'closed');
+			if (!killed && !closed && child.exitCode === null) {
 				await send('release');
 				await send('stop');
 			}
