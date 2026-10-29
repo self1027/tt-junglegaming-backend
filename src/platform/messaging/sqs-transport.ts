@@ -1,5 +1,4 @@
 import {
-	SQSClient,
 	ReceiveMessageCommand,
 	DeleteMessageCommand,
 	ChangeMessageVisibilityCommand,
@@ -7,22 +6,18 @@ import {
 } from '@aws-sdk/client-sqs';
 import type { SqsConfig } from './sqs-config.js';
 import type { MessageTransport, ReceivedMessage } from './transport.js';
+import type { SQSClient } from '@aws-sdk/client-sqs';
+import { createSqsClient } from './sqs-client.js';
 
 export class SqsTransport implements MessageTransport {
 	private readonly client: SQSClient;
 
 	constructor(private readonly config: SqsConfig) {
-		this.client = new SQSClient({
-			region: config.region,
-			...(config.endpoint === undefined
-				? {}
-				: { endpoint: config.endpoint }),
-			maxAttempts: 2,
-			requestHandler: {
-				connectionTimeout: 3000,
-				requestTimeout: (config.waitSeconds + 5) * 1000,
-			},
-		});
+		this.client = createSqsClient(
+			config,
+			(config.waitSeconds + 5) * 1000,
+			2,
+		);
 	}
 
 	async receive(

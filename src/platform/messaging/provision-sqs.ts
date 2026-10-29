@@ -67,6 +67,24 @@ export async function provisionSqs(
 	return { queueUrl: input.QueueUrl, dlqUrl: dlq.QueueUrl };
 }
 
+export async function provisionEventsQueue(
+	client: SQSClient,
+	name = 'wager-events',
+): Promise<string> {
+	const result = await client.send(
+		new CreateQueueCommand({
+			QueueName: `${name}.fifo`,
+			Attributes: {
+				FifoQueue: 'true',
+				ContentBasedDeduplication: 'false',
+				MessageRetentionPeriod: '1209600',
+			},
+		}),
+	);
+	if (result.QueueUrl === undefined) throw new Error('Missing events URL');
+	return result.QueueUrl;
+}
+
 if (import.meta.main) {
 	if (process.env.SQS_ENDPOINT === undefined)
 		throw new Error(
@@ -87,6 +105,11 @@ if (import.meta.main) {
 					config.visibilitySeconds,
 				),
 			),
+		);
+		console.log(
+			JSON.stringify({
+				eventsQueueUrl: await provisionEventsQueue(client),
+			}),
 		);
 	} finally {
 		client.destroy();
