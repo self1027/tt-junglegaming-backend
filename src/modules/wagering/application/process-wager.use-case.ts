@@ -1,15 +1,5 @@
-import {
-	InsufficientBalanceError,
-	WalletLedgerEntry,
-} from '../../financial/public/index.js';
-import type { BalanceChange, Wallet } from '../../financial/public/index.js';
 import { WagerTransaction } from '../domain/wager-transaction.js';
-import type { WagerReference } from '../domain/wager-transaction.js';
-import {
-	IncompatibleWagerReferenceError,
-	InvalidWagerReversalError,
-	WagerFinancialInvariantError,
-} from '../domain/errors.js';
+import { processWager, saveWagerBalanceChange } from './process-wager.js';
 import type {
 	WageringTransactionContext,
 	WageringUnitOfWork,
@@ -93,24 +83,20 @@ export class ProcessWagerUseCase {
 				walletId: wallet.id,
 				createdAt: at,
 			});
-			const { result, change } = await this.process(
+			const { result, change } = await processWager(
 				transaction,
 				wallet,
 				context,
 				at,
 			);
 			await context.transactions.insert(transaction);
-			if (change !== undefined) {
-				await context.wallets.save(wallet);
-				await context.ledger.append(
-					WalletLedgerEntry.create({
-						...change,
-						id: crypto.randomUUID(),
-						transactionId: transaction.id,
-						createdAt: at,
-					}),
-				);
-			}
+			await saveWagerBalanceChange(
+				transaction,
+				wallet,
+				context,
+				change,
+				at,
+			);
 			await context.outbox.append(
 				wagerEvents(transaction, wallet, change, at),
 			);
@@ -133,141 +119,5 @@ export class ProcessWagerUseCase {
 			if (delivery !== undefined) await context.inbox?.complete(delivery);
 			return result;
 		});
-	}
-
-	private async process(
-		transaction: WagerTransaction,
-		wallet: Wallet,
-		context: WageringTransactionContext,
-		at: Date,
-	): Promise<{
-		result: ProcessWagerResult;
-		change?: BalanceChange | undefined;
-	}> {
-		const identity = {
-			transactionId: transaction.id,
-			externalTransactionId: transaction.externalTransactionId,
-			walletId: wallet.id,
-			idempotentReplay: false,
-		};
-		const reject = (
-			failureCode: string,
-		): { result: ProcessWagerResult } => {
-			transaction.reject(failureCode);
-			return { result: { ...identity, status: 'REJECTED', failureCode } };
-		};
-		if (transaction.kind !== 'LOSS' && transaction.money.isZero())
-			return reject('ZERO_AMOUNT_NOT_ALLOWED');
-		let reference: WagerReference | undefined;
-		if (transaction.referenceExternalTransactionId !== undefined) {
-			const found = await context.transactions.findByExternalIdentity(
-				transaction.providerId,
-				transaction.referenceExternalTransactionId,
-			);
-			if (found !== undefined)
-				reference = {
-					transaction: found,
-					processedReversalKinds:
-						await context.transactions.findProcessedReversalKinds(
-							found.id,
-						),
-				};
-		}
-		let decision;
-		try {
-			decision = transaction.processingDecision(reference);
-		} catch (error) {
-			if (
-				error instanceof InvalidWagerReversalError &&
-				reference?.processedReversalKinds.some(
-					kind => kind === transaction.kind,
-				) === true
-			)
-				return reject('DUPLICATE_REVERSAL');
-			if (
-				error instanceof IncompatibleWagerReferenceError ||
-				error instanceof InvalidWagerReversalError ||
-				error instanceof WagerFinancialInvariantError
-			)
-				return reject('INCOMPATIBLE_REFERENCE');
-			throw error;
-		}
-		switch (decision.type) {
-			case 'POLICY_REQUIRED':
-				return reject(
-					decision.policy === 'ZERO_AMOUNT'
-						? 'ZERO_AMOUNT_NOT_ALLOWED'
-						: 'CUMULATIVE_REVERSAL_NOT_ALLOWED',
-				);
-			case 'PENDING_REFERENCE': {
-				transaction.markPendingReference();
-				return {
-					result: {
-						...identity,
-						status: 'PENDING_REFERENCE',
-						pendingReference: {
-							reason: 'NOT_FOUND',
-							externalTransactionId:
-								transaction.referenceExternalTransactionId ??
-								'',
-						},
-					},
-				};
-			}
-			case 'REFERENCE_NOT_PROCESSED': {
-				if (reference === undefined)
-					throw new Error('Missing reference decision facts');
-				if (
-					decision.status === 'REJECTED' ||
-					decision.status === 'FAILED'
-				)
-					return reject('REFERENCE_TERMINAL_INELIGIBLE');
-				return {
-					result: {
-						...identity,
-						status: 'PENDING',
-						pendingReference: {
-							reason: 'NOT_PROCESSED',
-							externalTransactionId:
-								reference.transaction.externalTransactionId,
-							transactionId: reference.transaction.id,
-							status: decision.status,
-						},
-					},
-				};
-			}
-			case 'READY':
-				break;
-		}
-		let change: BalanceChange | undefined;
-		try {
-			switch (decision.consequence.direction) {
-				case 'DEBIT':
-					change = wallet.debit(decision.consequence.money, at);
-					break;
-				case 'CREDIT':
-					change = wallet.credit(decision.consequence.money, at);
-					break;
-				case 'NONE':
-					break;
-			}
-		} catch (error) {
-			if (error instanceof InsufficientBalanceError)
-				return reject(
-					transaction.kind === 'BET'
-						? 'BET_INSUFFICIENT_BALANCE'
-						: 'REVERSAL_INSUFFICIENT_BALANCE',
-				);
-			throw error;
-		}
-		transaction.markProcessed(at, reference);
-		return {
-			result: {
-				...identity,
-				status: 'PROCESSED',
-				balance: wallet.balance.toProps(),
-			},
-			change,
-		};
 	}
 }
