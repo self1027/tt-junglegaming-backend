@@ -6,23 +6,22 @@ import { MikroOrmOutboxStore } from '../src/platform/persistence/mikro-orm-outbo
 import { OutboxMessageRow } from '../src/platform/persistence/models.js';
 import { persistedEvent } from '../src/modules/wagering/adapters/sqs/persisted-event.js';
 import { startConsumer } from './support/consumer-child.js';
-import {
-	suite,
+import { publisherSqsSuite } from './support/publisher-sqs-suite.js';
+
+const suite = publisherSqsSuite();
+const {
 	apiBaseUrl,
 	outputQueueUrl,
 	child,
 	wallet,
 	command,
 	children,
-	postgres,
 	seed,
 	until,
 	reconcile,
 	published,
 	receive,
-} from './support/publisher-sqs-suite.js';
-
-const { orm, sqs } = suite;
+} = suite;
 
 test('HTTP and SQS consumer → committed Outbox → events FIFO; all four v1 facts and financial replay', async () => {
 	const w = await wallet();
@@ -45,9 +44,9 @@ test('HTTP and SQS consumer → committed Outbox → events FIFO; all four v1 fa
 	const loss = command(w);
 	const messageId = crypto.randomUUID();
 	const { amount, ...data } = loss;
-	await sqs.client.send(
+	await suite.sqs.client.send(
 		new SendMessageCommand({
-			QueueUrl: sqs.queueUrl,
+			QueueUrl: suite.sqs.queueUrl,
 			MessageGroupId: w.id,
 			MessageDeduplicationId: messageId,
 			MessageBody: JSON.stringify({
@@ -58,19 +57,22 @@ test('HTTP and SQS consumer → committed Outbox → events FIFO; all four v1 fa
 			}),
 		}),
 	);
-	const consumer = await startConsumer({ ...sqs.env, ...postgres.env });
+	const consumer = await startConsumer({
+		...suite.sqs.env,
+		...suite.postgres.env,
+	});
 	children.push(consumer);
 	await until(
 		async () =>
 			(
-				await orm.em.execute(
+				await suite.orm.em.execute(
 					"select id from inbox_messages where message_id = ? and status = 'PROCESSED'",
 					[messageId],
 				)
 			).length === 1,
 		'SQS financial commit',
 	);
-	const before = await orm.em.fork().find(OutboxMessageRow, {});
+	const before = await suite.orm.em.fork().find(OutboxMessageRow, {});
 	expect(before).toHaveLength(7);
 	expect(before.every(row => row.status === 'PENDING')).toBe(true);
 	expect(new Set(before.map(row => row.eventType)).size).toBe(4);
@@ -96,14 +98,14 @@ test('HTTP and SQS consumer → committed Outbox → events FIFO; all four v1 fa
 		idempotentReplay: true,
 		balance: { amount: '100.00', currency: 'BRL' },
 	});
-	expect(await orm.em.fork().count(OutboxMessageRow)).toBe(7);
+	expect(await suite.orm.em.fork().count(OutboxMessageRow)).toBe(7);
 	expect(
-		await orm.em.execute(
+		await suite.orm.em.execute(
 			"select id from idempotency_records where status = 'COMPLETED'",
 		),
 	).toHaveLength(5);
 	expect(
-		await orm.em.execute(
+		await suite.orm.em.execute(
 			'select id from wallet_ledger_entries where wallet_id = ?',
 			[w.id],
 		),
@@ -111,7 +113,7 @@ test('HTTP and SQS consumer → committed Outbox → events FIFO; all four v1 fa
 	await reconcile(w.id);
 	expect(
 		(
-			await sqs.client.send(
+			await suite.sqs.client.send(
 				new ReceiveMessageCommand({
 					QueueUrl: outputQueueUrl(),
 					WaitTimeSeconds: 1,
@@ -133,11 +135,11 @@ test('three independent publishers claim exclusive events in parallel and hold n
 		publishers.map(instance => instance.wait('before-send')),
 	);
 	expect(new Set(held.map(row => row.eventId)).size).toBe(3);
-	const txs = await orm.em.execute(
+	const txs = await suite.orm.em.execute(
 		"select pid from pg_stat_activity where application_name like 'outbox-publisher-%' and state = 'idle in transaction'",
 	);
 	expect(txs).toHaveLength(0);
-	const observer = orm.em.fork();
+	const observer = suite.orm.em.fork();
 	await observer.begin();
 	try {
 		expect(
@@ -149,7 +151,9 @@ test('three independent publishers claim exclusive events in parallel and hold n
 		await observer.rollback();
 	}
 	expect(
-		await orm.em.fork().count(OutboxMessageRow, { status: 'PUBLISHED' }),
+		await suite.orm.em
+			.fork()
+			.count(OutboxMessageRow, { status: 'PUBLISHED' }),
 	).toBe(0);
 	console.log(
 		JSON.stringify({
@@ -169,14 +173,14 @@ test.each(['before-send', 'after-send', 'finalize-fail'])(
 	'crash/failure at %s recovers the same historical event through an expired lease',
 	async mode => {
 		await seed();
-		const original = await orm.em
+		const original = await suite.orm.em
 			.fork()
 			.findOneOrFail(OutboxMessageRow, { eventVersion: 1 });
 		const a = await child(mode);
 		await a.send('start');
 		if (mode === 'finalize-fail') await a.wait('finalization_failed');
 		else await a.wait(mode);
-		const pending = await orm.em
+		const pending = await suite.orm.em
 			.fork()
 			.findOneOrFail(OutboxMessageRow, { eventVersion: 1 });
 		expect(pending.status).toBe('PENDING');
@@ -188,7 +192,7 @@ test.each(['before-send', 'after-send', 'finalize-fail'])(
 		const b = await child();
 		await b.send('start');
 		await published(1);
-		const final = await orm.em
+		const final = await suite.orm.em
 			.fork()
 			.findOneOrFail(OutboxMessageRow, { eventVersion: 1 });
 		expect(final.eventId).toBe(original.eventId);
@@ -199,7 +203,7 @@ test.each(['before-send', 'after-send', 'finalize-fail'])(
 		await b.wait('claim_recovered', original.eventId);
 		if (mode === 'before-send')
 			expect((await receive(1))[0]?.body).toEqual(original.payload);
-		const store = new MikroOrmOutboxStore(orm.em);
+		const store = new MikroOrmOutboxStore(suite.orm.em);
 		expect(await store.claim(10, 'after-published', 30000)).toHaveLength(0);
 		console.log(
 			JSON.stringify({

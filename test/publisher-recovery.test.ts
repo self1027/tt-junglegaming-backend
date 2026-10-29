@@ -1,17 +1,10 @@
 import 'reflect-metadata';
 import { test, expect } from 'bun:test';
 import { OutboxMessageRow } from '../src/platform/persistence/models.js';
-import {
-	suite,
-	outputQueueUrl,
-	child,
-	seed,
-	until,
-	published,
-	receive,
-} from './support/publisher-sqs-suite.js';
+import { publisherSqsSuite } from './support/publisher-sqs-suite.js';
 
-const { postgres, sqs, orm } = suite;
+const suite = publisherSqsSuite();
+const { outputQueueUrl, child, seed, until, published, receive } = suite;
 
 test('stale publisher returns after another process owns the lease and cannot finalize or release it', async () => {
 	await seed();
@@ -21,12 +14,12 @@ test('stale publisher returns after another process owns the lease and cannot fi
 	const b = await child('before-send');
 	await b.send('start');
 	await b.wait('before-send');
-	const claimB = await orm.em
+	const claimB = await suite.orm.em
 		.fork()
 		.findOneOrFail(OutboxMessageRow, { eventVersion: 1 });
 	await a.send('release');
 	await a.wait('publication_confirmed');
-	const afterA = await orm.em
+	const afterA = await suite.orm.em
 		.fork()
 		.findOneOrFail(OutboxMessageRow, { eventVersion: 1 });
 	expect(afterA.claimToken).toBe(claimB.claimToken);
@@ -50,7 +43,7 @@ test('network response lost during actual SendMessage is uncertain and another p
 		hostname: '127.0.0.1',
 		fetch: async request => {
 			const target = new URL(request.url);
-			target.host = new URL(sqs.env.SQS_ENDPOINT ?? '').host;
+			target.host = new URL(suite.sqs.env.SQS_ENDPOINT ?? '').host;
 			const body = await request.text();
 			const response = await fetch(target, {
 				method: request.method,
@@ -95,7 +88,7 @@ test('network response lost during actual SendMessage is uncertain and another p
 		expect((await receive(1))[0]?.body.eventId).toBeString();
 		expect(
 			(
-				await orm.em
+				await suite.orm.em
 					.fork()
 					.findOneOrFail(OutboxMessageRow, { eventVersion: 1 })
 			).status,
@@ -114,15 +107,15 @@ test('network response lost during actual SendMessage is uncertain and another p
 
 test('real SQS outage persists retry/backoff and resumes with stable envelope; malformed facts do not starve others', async () => {
 	await seed(2);
-	const original = await orm.em.fork().find(OutboxMessageRow, {});
+	const original = await suite.orm.em.fork().find(OutboxMessageRow, {});
 	const publisher = await child('before-send');
 	await publisher.send('start');
 	await publisher.wait('before-send');
-	await sqs.control('pause');
+	await suite.sqs.control('pause');
 	try {
 		await publisher.send('release');
 		await publisher.wait('publication_retry');
-		const rows = await orm.em.fork().find(OutboxMessageRow, {});
+		const rows = await suite.orm.em.fork().find(OutboxMessageRow, {});
 		expect(rows.every(row => row.status === 'PENDING')).toBe(true);
 		expect(
 			rows.some(
@@ -132,7 +125,7 @@ test('real SQS outage persists retry/backoff and resumes with stable envelope; m
 			),
 		).toBe(true);
 	} finally {
-		await sqs.control('unpause');
+		await suite.sqs.control('unpause');
 	}
 	await published(2);
 	const messages = await receive(2);
@@ -141,7 +134,7 @@ test('real SQS outage persists retry/backoff and resumes with stable envelope; m
 			messages.find(message => message.body.eventId === row.eventId)
 				?.body,
 		).toEqual(row.payload);
-	await orm.em.fork().insert(OutboxMessageRow, {
+	await suite.orm.em.fork().insert(OutboxMessageRow, {
 		eventId: crypto.randomUUID(),
 		aggregateId: crypto.randomUUID(),
 		eventType: 'FutureEvent',
@@ -155,7 +148,7 @@ test('real SQS outage persists retry/backoff and resumes with stable envelope; m
 	await publisher.wait('publication_retry');
 	await until(
 		async () =>
-			(await orm.em.fork().count(OutboxMessageRow, {
+			(await suite.orm.em.fork().count(OutboxMessageRow, {
 				status: 'PENDING',
 				lastError: 'INVALID_EVENT',
 			})) === 1,
@@ -169,17 +162,17 @@ test('PostgreSQL outage after SQS acceptance leaves publication recoverable afte
 	await a.send('start');
 	await a.wait('after-send');
 	expect((await receive(1))[0]?.body.eventId).toBeString();
-	await postgres.control('stop');
+	await suite.postgres.control('stop');
 	try {
 		await a.send('release');
 		await a.wait('finalization_failed');
 		await a.kill();
 	} finally {
-		await postgres.control('start');
+		await suite.postgres.control('start');
 	}
 	expect(
 		(
-			await orm.em
+			await suite.orm.em
 				.fork()
 				.findOneOrFail(OutboxMessageRow, { eventVersion: 1 })
 		).status,
