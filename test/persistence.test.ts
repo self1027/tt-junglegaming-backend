@@ -87,7 +87,11 @@ describe('PostgreSQL foundation', () => {
 	test('applies on an empty database, down/up is reversible with disposable data', async () => {
 		expect(
 			(await orm.migrator.getExecuted()).map(entry => entry.name),
-		).toEqual(['Migration202610280001', 'Migration202610280002']);
+		).toEqual([
+			'Migration202610280001',
+			'Migration202610280002',
+			'Migration202610290001',
+		]);
 		expect(await orm.migrator.getPending()).toHaveLength(0);
 		await orm.em.fork().persist(wallet()).flush();
 		await command(

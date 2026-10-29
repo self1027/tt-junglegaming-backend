@@ -145,6 +145,9 @@ export const OutboxMessageRow = defineEntity({
 		createdAt,
 		nextAttemptAt: createdAt,
 		publishedAt: timestamp.nullable(),
+		claimToken: p.uuid().nullable(),
+		claimedBy: text.nullable(),
+		claimedUntil: timestamp.nullable(),
 	},
 });
 
