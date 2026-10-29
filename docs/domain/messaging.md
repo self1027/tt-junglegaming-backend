@@ -1,6 +1,6 @@
 # Messaging: entrada, eventos e recuperação
 
-Requisitos **explícitos** dos §§3, 5, 6.0, 6.5, 7.1 e 9–13 de [challenge.md](../challenge.md), fonte primária imutável. Fronteiras/processos são decisões de [ARCHITECTURE.md](../../ARCHITECTURE.md). A Task 07 implementa eventos tipados e inserção transacional na Outbox pelo ProcessWagerUseCase. Transportes, Inbox e publicação continuam planejados.
+Requisitos **explícitos** dos §§3, 5, 6.0, 6.5, 7.1 e 9–13 de [challenge.md](../challenge.md), fonte primária imutável. Fronteiras/processos são decisões de [ARCHITECTURE.md](../../ARCHITECTURE.md). A Task 07 implementa eventos tipados e inserção transacional na Outbox pelo ProcessWagerUseCase. A Task 08 expõe esse mesmo fluxo por [HTTP](../http-api.md). SQS, Inbox e publicação continuam planejados; Outbox permanece PENDING.
 
 ## Entradas HTTP e SQS (§§9–10)
 

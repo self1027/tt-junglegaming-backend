@@ -1,6 +1,6 @@
 # Distributed Wagering Processor
 
-API NestJS para um monólito modular hexagonal, com fundação PostgreSQL/MikroORM. Única rota: `GET /health/live`, com HTTP 200 e `{"status":"ok"}`. Liveness verifica apenas o processo HTTP.
+API NestJS para um monólito modular hexagonal, com PostgreSQL/MikroORM, abertura/consulta de wallets, ledger paginado, processamento Wagering e reconciliação. [Contrato HTTP e exemplos curl](docs/http-api.md). `GET /health/live` retorna 200 `{"status":"ok"}` sem consultar banco; `/health/ready` retorna 503 enquanto SQS não estiver configurado, mesmo com PostgreSQL disponível. Autenticação omitida nesta etapa, com guard no-op explícito para futura integração com IdP.
 
 Requer Bun **1.4.4** no PATH e Docker com Compose para PostgreSQL local e testes de integração. Node, npm, pnpm, Yarn e Nest CLI não são necessários para os comandos do projeto. Dependências diretas têm versões exatas e `bun.lock` deve ser versionado.
 
@@ -62,7 +62,9 @@ src/
 test/                           # integração e fronteiras
 ```
 
-Pastas vazias são preservadas por `.gitkeep`. Persistência das seis tabelas, núcleo Financial, domínio Wagering, portas, mappers, adapters, UnitOfWork e ProcessWagerUseCase estão implementados. APIs financeiras e abertura versão 1 estão em [Financial](docs/domain/financial.md); processamento, entrada/saída, hash, replay e políticas em [Wagering](docs/domain/wagering.md). Endpoints financeiros, processamento de mensagens e workers continuam futuros. A composição `createProcessWagerUseCase(orm)` fica em `src/bootstrap/wagering.ts`.
+Pastas vazias são preservadas por `.gitkeep`. Persistência das seis tabelas, núcleo Financial, domínio Wagering, portas, mappers, adapters, UnitOfWork, ProcessWagerUseCase e endpoints HTTP estão implementados. Abertura atômica versão 1 e reconciliação exata estão em [Financial](docs/domain/financial.md); processamento, entrada/saída, hash, replay e políticas em [Wagering](docs/domain/wagering.md). SQS, processamento de mensagens e workers continuam futuros. A composição `createProcessWagerUseCase(orm)` fica em `src/bootstrap/wagering.ts`; ApiModule injeta o mesmo caso de uso sobre a mesma UnitOfWork.
+
+Task 08: `bun test test/http-api.test.ts` testa Nest/PostgreSQL reais; `bun test test/http-concurrency.test.ts` inicia três processos API independentes e usa barreiras SQL para concorrência, duplicatas e snapshot. `bun test test/wallet-use-cases.test.ts test/http-input.test.ts` cobre aplicação/validação. [Relatório e limitações](docs/task08-http-report.md). Reconciliação usa REPEATABLE READ READ ONLY e nunca ajusta saldo. Outbox permanece PENDING, sem publisher. Autenticação e exportação de métricas não estão implementadas.
 
 Task 06: `bun test test/process-wager.test.ts test/wagering-persistence.test.ts test/process-wager-persistence.test.ts` cobre unidade, adapters e processamento PostgreSQL, inclusive três processos Bun, 50 duplicatas e recuperação antes/depois do commit. [Evidências e limitações](docs/persistence.md#task-06--processamento-atômico). A migration adicional reforça a unicidade de reversões diretas; `db:rollback` remove somente a última migration. Rollback integral até a fundação continua recusando ledger confirmado.
 

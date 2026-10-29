@@ -207,7 +207,17 @@ Ordem de criação: **wallet → transação financeira → ledger**, por causa 
 
 `insert` nunca atualiza uma wallet existente. `save` exige exatamente a instância retornada pelo lock naquela execução; leituras simples e objetos de outro contexto não podem sobrescrever saldo. O UPDATE condiciona ID e versão observada sob lock, exigindo uma linha alterada: **versão é proteção adicional e rastreabilidade**, enquanto o lock serializa o cálculo financeiro. A versão vem do domínio; o ORM não a incrementa. Sem mudança, save não executa UPDATE nem altera timestamps. Isso permite leitura/replay sem efeitos; replay de wagering ainda não existe.
 
-A [proposta registrada antes da implementação](financial-persistence-proposal.md) adicionou `Wallet.open` sem alterar `create` ou `rehydrate`; detalhes pertencem a [Financial](domain/financial.md#abertura-9). Abertura positiva é testada com OPENING legítima e ledger, versão 1; abertura zero não gera registro financeiro. Não há endpoint nem caso de uso de abertura.
+A [proposta registrada antes da implementação](financial-persistence-proposal.md) adicionou `Wallet.open` sem alterar `create` ou `rehydrate`; detalhes pertencem a [Financial](domain/financial.md#abertura-9). Abertura positiva é testada com OPENING legítima e ledger, versão 1; abertura zero não gera registro financeiro. A Task 08 entrega o caso de uso e endpoint sobre essas mesmas portas.
+
+## Task 08 — abertura, consultas e snapshot
+
+CreateWalletUseCase usa uma execução transacional para wallet/OPENING/ledger, com versão 1. Falhas em OPENING ou ledger revertem toda a criação. O adapter mantém o erro PostgreSQL original; o filtro HTTP só converte 23505 de wallets_player_currency_unique em conflito de abertura. Erros de unicidade de outras estruturas não viram esse conflito.
+
+UnitOfWork.execute recebe opção localizada `{ readOnly: true }`: fork sem contexto transacional herdado, isolamento REPEATABLE READ e SET TRANSACTION READ ONLY antes da primeira leitura. ReconcileWalletUseCase e consultas usam essa execução. PostgreSQL impede INSERT nesse modo; snapshot é mantido entre leitura da wallet e do ledger, sem bloqueio exclusivo. Contexto continua invalidado ao sair; processamento normal preserva READ COMMITTED e a ordem de locks da Task 06. Nenhuma migration foi necessária, e nenhuma garantia do schema foi relaxada.
+
+Ledger paginado aplica limite/keyset no banco por `(created_at,id)`, usando a linha âncora para recuperar o timestamp completo. Não converte timestamp SQL para Date antes de comparar o cursor; empates e microssegundos são cobertos por fixture explícita. DTOs excluem entidades/mapeamentos técnicos. Cada página tem snapshot próprio; não se promete um único snapshot entre requisições de paginação. Reconciliação lê todo o histórico no mesmo snapshot e não escreve.
+
+Validação em [HTTP real](../test/http-api.test.ts) e [três processos API](../test/http-concurrency.test.ts): opening zero/positivo/grande, rollback em OPENING/ledger, criação concorrente, 100/80/80, 50 duplicatas, wallets independentes, snapshot durante commit, resposta perdida após commit e falha no segundo evento Outbox. O teste de pool saturado classifica timeout transitório como 503 sem comprometer liveness. [Contrato HTTP](http-api.md) e [relatório](task08-http-report.md).
 
 ### Evidências da integração — 2026-10-28
 

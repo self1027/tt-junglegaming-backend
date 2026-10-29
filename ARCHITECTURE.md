@@ -4,7 +4,7 @@
 
 O [enunciado](docs/challenge.md) é a fonte imutável dos requisitos. O [índice de requisitos](docs/requirements.md) aponta seus contratos e critérios. Aqui ficam decisões estruturais; regras financeiras, operações e transporte ficam em [docs/domain](docs/domain/). **Aprovada** significa determinada pela tarefa de arquitetura/bootstrap; **obrigatória** vem do enunciado; **pendente/proposta** não autoriza implementação como contrato fechado.
 
-Implementado: API NestJS em [src/main.api.ts](src/main.api.ts), composição em [src/bootstrap](src/bootstrap/), `GET /health/live`, fundação PostgreSQL/MikroORM, domínio [Financial](docs/domain/financial.md), domínio [Wagering](docs/domain/wagering.md) e ProcessWagerUseCase com idempotência persistente, processamento financeiro atômico e eventos tipados na Outbox. Não há endpoints financeiros, Inbox, publicação, SQS, consumer, worker, readiness ou reconciliação. Dockerfile preservado; [compose.yaml](compose.yaml) oferece PostgreSQL.
+Implementado: API NestJS em [src/main.api.ts](src/main.api.ts), composição em [src/bootstrap](src/bootstrap/), [contratos HTTP](docs/http-api.md), abertura atômica/consultas/reconciliação, fundação PostgreSQL/MikroORM, domínio [Financial](docs/domain/financial.md), domínio [Wagering](docs/domain/wagering.md) e ProcessWagerUseCase com idempotência persistente, processamento financeiro atômico e eventos tipados na Outbox. Liveness independe do banco; readiness verifica PostgreSQL e permanece 503 por ausência de SQS. Não há Inbox, publicação, SQS, consumer ou worker. Dockerfile preservado; [compose.yaml](compose.yaml) oferece PostgreSQL.
 
 ## Decisões aprovadas
 
@@ -26,7 +26,7 @@ As regras atuais em [.dependency-cruiser.cjs](.dependency-cruiser.cjs) e [eslint
 
 ## Unidade transacional
 
-`ProcessWagerUseCase`, em application de Wagering, coordena o processamento pela porta `UnitOfWork`. O contexto oferece repositórios associados **à mesma transação**, sem tipos do ORM nos contratos internos. Wagering estende o contexto financeiro público com WagerTransactionRepository e IdempotencyRepository. Financial não conhece essa extensão. [bootstrap/wagering.ts](src/bootstrap/wagering.ts) compõe o caso de uso sem lógica financeira e sem endpoints novos.
+`ProcessWagerUseCase`, em application de Wagering, coordena o processamento pela porta `UnitOfWork`. O contexto oferece repositórios associados **à mesma transação**, sem tipos do ORM nos contratos internos. Wagering estende o contexto financeiro público com WagerTransactionRepository e IdempotencyRepository. Financial não conhece essa extensão. [bootstrap/wagering.ts](src/bootstrap/wagering.ts) e ApiModule compõem o caso de uso sem lógica financeira. Controllers HTTP o reutilizam, sem caminho alternativo de saldo.
 
 Na Task 06, a unidade atômica passou a abranger reserva/conclusão idempotente, WagerTransaction, wallet e ledger quando há mudança. A Task 07 inclui Outbox antes da conclusão idempotente. Uma única chamada a execute, sem retry interno; resposta somente após commit. A aplicação financeira participa do contexto recebido e **não abre transação independente**. Inbox deverá participar futuramente da mesma unidade.
 
@@ -47,7 +47,13 @@ a unidade financeira; replay retorna antes de construir eventos. Não há lock n
 commit local ou publicação. Identidade, correlação, causação e evolução ficam no
 contrato Messaging; [evidências de durabilidade e concorrência](docs/task07-outbox-report.md).
 
-Abertura de wallet terá caso de uso e fronteira próprios, independentes de `ProcessWagerUseCase`; wallet, `OPENING` e crédito de abertura são atômicos quando há saldo inicial positivo (§9). `Wallet.open` preserva versão 1; a porta/adaptação de OPENING pertence a Financial e usa a tabela técnica compartilhada, sem importar Wagering. O fluxo é demonstrado pela integração, sem antecipar endpoint/caso de uso.
+CreateWalletUseCase tem fronteira própria, independente de `ProcessWagerUseCase`; wallet, `OPENING` e crédito de abertura são atômicos quando há saldo inicial positivo (§9). `Wallet.open` preserva versão 1; a porta/adaptação de OPENING pertence a Financial e usa a tabela técnica compartilhada, sem importar Wagering. Zero não cria registro fictício nem evento Wagering.
+
+### Task 08 — adapters HTTP e leitura consistente
+
+DTOs são allowlists runtime; domínio/casos de uso não importam Nest ou ORM. Controllers só delegam; pipes validam estrutura, Unicode, Money e header, e helper serializa o status do resultado. Filtro central na composição traduz erros de aplicação e constraints específicas, sanitiza falhas técnicas e distingue 400/404/409/422/503/500. ProcessWagerUseCase valida walletId informado inclusive em replay, preservando hash histórico e resolução por player/moeda. Consultas retornam projeções explícitas, sem ORM/key/hash.
+
+UnitOfWork.execute aceita `{ readOnly: true }` para consultas/reconciliação: REPEATABLE READ READ ONLY na mesma sessão. Saldo e ledger compartilham snapshot sem locks exclusivos; escrita normal mantém READ COMMITTED e a coordenação anterior. Diferença exata é armazenado menos reconstruído. Divergência não modifica registros; diagnóstico gera log seguro e contador local por instância, sem exporter/agregação de métricas. Histórico completo é lido em memória nesta etapa. Ledger usa paginação keyset SQL com âncora na linha imutável para preservar microssegundos. [Evidências](docs/task08-http-report.md).
 
 ## Concorrência obrigatória e desenho planejado
 
@@ -65,11 +71,11 @@ Canonicalização, scope, zero, referências pendentes, failure codes e polític
 
 ## Processos planejados
 
-| Entrypoint em src  | Responsabilidade                                                      | Situação                      |
-| ------------------ | --------------------------------------------------------------------- | ----------------------------- |
-| `main.api.ts`      | HTTP e resposta síncrona do caso de uso, inclusive resultado pendente | Somente liveness implementada |
-| `main.consumer.ts` | Receber SQS, Inbox, delegar processamento e ACK após commit           | Não implementado              |
-| `main.worker.ts`   | Executar Outbox Publisher e Pending Reference Processor               | Não implementado              |
+| Entrypoint em src  | Responsabilidade                                                      | Situação                                           |
+| ------------------ | --------------------------------------------------------------------- | -------------------------------------------------- |
+| `main.api.ts`      | HTTP e resposta síncrona do caso de uso, inclusive resultado pendente | Implementado; readiness ainda sinaliza SQS ausente |
+| `main.consumer.ts` | Receber SQS, Inbox, delegar processamento e ACK após commit           | Não implementado                                   |
+| `main.worker.ts`   | Executar Outbox Publisher e Pending Reference Processor               | Não implementado                                   |
 
 Outbox Publisher publica eventos; Pending Reference Processor reprocessa referências ausentes. São componentes distintos, mesmo no mesmo processo. HTTP e SQS chamam o mesmo `ProcessWagerUseCase` e compartilham a aplicação financeira, sem fluxo de saldo paralelo. Ciclo de vida deve permitir concluir mensagens ou devolver visibilidade no SIGTERM (§10). Não são necessários placeholders executáveis nesta etapa.
 
@@ -83,7 +89,7 @@ Idempotência de negócio identifica operação e payload e preserva resultado o
 
 Stack de §4: PostgreSQL, AWS SQS via LocalStack ou MiniStack, Docker Compose e migrations versionadas/reversíveis. MikroORM foi escolhido conforme a decisão de persistência abaixo. Modelagem encapsulada/factories do domínio, eventos tipados e garantias no schema são obrigações, com detalhes em [requisitos](docs/requirements.md).
 
-Autenticação (§2) é opcional, sem pontuação. Decisão de implementar ou omitir ainda pendente: se implementada, integrar IdP externo, sem usuários/senhas artesanais; se omitida, registrar desenho e ponto de extensão explícito em código. Não existe esse ponto no bootstrap atual. Health aberto e fila interna confiável não dispensam validação de provider no domínio.
+Autenticação (§2) foi omitida no escopo da Task 08, que exclui autenticação customizada. [NoAuthGuard](src/bootstrap/no-auth.guard.ts), registrado como APP_GUARD, é o ponto explícito no-op para futura integração OIDC com IdP externo (por exemplo Keycloak), validação de token/issuer/audience e vínculo de identidade ao provider. Essa futura integração deverá deixar health aberto; não há usuários/senhas artesanais nem autenticação efetiva agora. Health aberto e fila interna confiável não dispensam validação de provider no domínio.
 
 Partidas dobradas, OpenTelemetry, dashboard e teste de carga são opcionais, não entregas aprovadas. Benefícios do monólito: uma transação SQL e contratos locais; custo: banco compartilhado, coordenação de hot wallets e disciplina de fronteiras. Processos separados não removem essas limitações. A aceitação distribuída só poderá ser demonstrada com infraestrutura/testes reais.
 
@@ -95,15 +101,14 @@ Nenhuma alternativa abaixo está aprovada. Registre decisão, justificativa, con
 | ------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | Locks               | Política futura de timeout/retries e tratamento dos conflitos/deadlocks propagados                                   |
 | Unidade de trabalho | Ampliação futura para Inbox; inserção Outbox entregue na Task 07                                                     |
-| OPENING             | Caso de uso e endpoint; infraestrutura e factory versão 1 já disponíveis                                             |
 | Idempotência        | Atualização condicionada de resultado não terminal pelo futuro worker; hash/scope/replay já definidos na Task 06     |
 | Inbox/Outbox        | Coordenação de claims, unicidade, publishers concorrentes e recuperação de publicação incerta                        |
 | Retries/referências | Backoff exponencial obrigatório para referências; parâmetros/limites, aquisição concorrente e classificação de erros |
 | TTL de referências  | Definir tentativas ou TTL e justificar; esgotamento rejeita e emite evento                                           |
 | Filas de eventos    | Destinos, configuração FIFO/deduplicação, retenção e recuperação; entrada/DLQ já têm nomes no contrato               |
-| Contratos externos  | Status HTTP e integração com transportes; failure codes de negócio definidos na Task 06                              |
+| Contratos externos  | SQS e readiness completo; HTTP entregue na Task 08, failure codes de negócio definidos na Task 06                    |
 | Falhas permanentes  | Classificação explícita para FAILED e coordenação com DLQ; falhas transitórias propagam rollback                     |
-| Autenticação        | Implementar IdP ou omitir com desenho/ponto de extensão explícito                                                    |
+| Autenticação        | Integração futura com IdP; omissão e ponto de extensão registrados na Task 08                                        |
 
 Locks dos adapters e processamento financeiro completo são exercitados em três processos independentes na Task 06; aceitação de mensageria/publicação continua futura. Não há prazo ou limite comercial de dinheiro definido.
 

@@ -1,6 +1,6 @@
 # Financial: contratos e invariantes
 
-Requisitos **explícitos** derivados dos §§5, 6.0–6.4, 7–9 e 13 de [challenge.md](../challenge.md), que permanece primário e imutável. Estrutura e fronteiras aprovadas estão em [ARCHITECTURE.md](../../ARCHITECTURE.md). Money, Wallet, WalletLedgerEntry e sua integração transacional PostgreSQL estão implementados e participam de ProcessWagerUseCase. Casos de uso de abertura/reconciliação e endpoints continuam futuros.
+Requisitos **explícitos** derivados dos §§5, 6.0–6.4, 7–9 e 13 de [challenge.md](../challenge.md), que permanece primário e imutável. Estrutura e fronteiras aprovadas estão em [ARCHITECTURE.md](../../ARCHITECTURE.md). Money, Wallet, WalletLedgerEntry e sua integração transacional PostgreSQL estão implementados e participam de ProcessWagerUseCase. A Task 08 entrega CreateWalletUseCase, QueryWalletUseCase, ReconcileWalletUseCase e seus [endpoints HTTP](../http-api.md).
 
 ## Modelagem e Money (§§6.0–6.1)
 
@@ -49,13 +49,17 @@ Zero é permitido como saldo inicial: a condição de gerar OPENING é saldo pos
 
 `Wallet.create` permanece exclusivamente a zero. A [proposta de evolução](../financial-persistence-proposal.md), registrada antes da implementação conforme §10 da tarefa de integração, adiciona `Wallet.open(OpenWalletProps)`: recebe `initialBalance: Money` junto aos campos de criação, valida as mesmas invariantes estruturais e inicia saldo/versão/datas sem aplicar crédito comum. Negativo ou moeda incompatível falham. `rehydrate` continua exclusivamente reconstruindo estado; mappers não o usam para simular abertura.
 
-A infraestrutura permite ao futuro caso de uso persistir wallet → OPENING → ledger CREDIT numa única execução de `UnitOfWork`, inclusive com saldo positivo e versão 1. A factory não persiste nada; a obrigação de registrar OPENING/ledger é do coordenador. [Testes reais](../../test/financial-persistence.test.ts) demonstram abertura positiva atômica, rollback integral e abertura zero sem registro fictício. Endpoint e caso de uso de abertura não estão implementados.
+CreateWalletUseCase persiste wallet → OPENING → ledger CREDIT numa única execução de `UnitOfWork`, inclusive com saldo positivo e versão 1. A factory não persiste nada; a obrigação de registrar OPENING/ledger é do coordenador. Não há evento Wagering de abertura. A constraint player/moeda protege concorrência, sem mutex global; o filtro HTTP traduz somente a violação dessa constraint para 409, preservando o erro SQL original dos adapters. [Testes dos adapters](../../test/financial-persistence.test.ts) e [HTTP real](../../test/http-api.test.ts) demonstram abertura positiva atômica, rollback integral em OPENING/ledger e abertura zero sem registro fictício.
 
 ## Reconciliação (§§9, 13)
 
 Reconstruir saldo pelo ledger, incluindo crédito de abertura quando existente, e comparar com materializado. `POST /wallets/:walletId/reconciliation` retorna walletId, storedBalance, calculatedBalance, difference (MoneyProps), consistent e checkedEntries.
 
-Divergências devem aparecer na resposta, logs e métrica; não corrigir silenciosamente. Sinal da diferença, snapshot consistente sob concorrência e procedimentos de remediação não foram definidos. Não inventar política de ajuste financeiro. A igualdade entre saldo materializado e reconstruído é a invariante final dos testes financeiros.
+ReconcileWalletUseCase usa Money exato e `difference = storedBalance - calculatedBalance`, preservando o sinal. Wallet e histórico inteiro compartilham uma transação REPEATABLE READ READ ONLY, sem locks exclusivos. Reconstrói desde zero por direção/valor, incluindo OPENING e reversões; não confia no último balanceAfter. Confere a continuidade dos saldos por grupos de timestamp; em empates exige uma cadeia conectada possível, sem ordenar financeiramente por UUID. Cada lançamento passa pelas validações de aritmética do domínio. Incoerência histórica pode produzir consistent false com diferença zero.
+
+Divergências aparecem na resposta, log JSON seguro e contador por instância, sem autocorreção, compensação fictícia ou escrita de qualquer espécie. O contador não é agregado/durável nem exportado para backend de métricas nesta etapa. Remediação financeira continua fora do escopo. A igualdade entre saldo materializado e reconstruído é a invariante final dos testes financeiros. [Testes de concorrência HTTP](../../test/http-concurrency.test.ts) confirmam um commit entre leitura de wallet e ledger, mantendo o snapshot anterior consistente.
+
+QueryWalletUseCase retorna DTO de wallet e ledger paginado por `(created_at,id)`. A âncora do cursor é a linha imutável no PostgreSQL, sem truncar microssegundos; default 50, intervalo 1–100. Contratos, respostas e limites estão em [HTTP](../http-api.md).
 
 ## Pendências e limites
 
