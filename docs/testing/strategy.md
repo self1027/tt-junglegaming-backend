@@ -83,6 +83,24 @@ rotas HTTP, JSON e configurações de exemplo. Exemplos SQS/eventos passam pelos
 parsers de runtime. Diagramas de texto são conferidos contra os fluxos e revisados
 separadamente; não exigem dependência de renderização.
 
+## Demonstração e CI
+
+O [workflow](../../.github/workflows/ci.yml) tem jobs independentes: quality
+executa formatação/types/lint/build; integration executa a suíte completa com
+os harnesses reais; docker-smoke sobe o [Compose independente](../../compose.demo.yaml),
+executa o smoke duas vezes, reinicia os processos e repete a verificação.
+Também exige falha do smoke quando a API está inacessível. Integração recebe
+30 minutos, incluindo setup/downloads, sem alterar timeouts internos dos testes.
+Logs são guardados como artifacts e recursos descartáveis são removidos em always.
+Resultado remoto deve ser conferido na execução do commit correspondente.
+
+O [smoke](../../docker/smoke.ts) usa HTTP/SQS e SQL somente leitura para conferir
+os registros persistidos. Demonstra 100/80/80, replay histórico/conflito,
+duplicata entregue pela Inbox, publicação efetiva de dez eventos da Outbox e
+resolução de REFUND fora de ordem. É uma demonstração curta com uma API; a prova
+de múltiplas instâncias continua nas suítes distribuídas. Comandos, isolamento
+de identidades e consumo dos eventos próprios estão no [quickstart](../quickstart.md).
+
 ## Alcance da evidência
 
 Mocks unitários cobrem decisões isoladas; só containers/processos reais sustentam

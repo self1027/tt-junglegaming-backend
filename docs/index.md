@@ -1,6 +1,6 @@
 # Referência técnica
 
-Comece pelo [README](../README.md) para executar o serviço e pela
+Comece pelo [README](../README.md) e pelo [quickstart](quickstart.md) para executar o serviço e pela
 [arquitetura](../ARCHITECTURE.md) para identificar módulos e processos.
 
 | Assunto                                             | Fonte responsável                                                                                                |

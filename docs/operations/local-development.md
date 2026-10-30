@@ -7,8 +7,9 @@ diretas têm versão exata; instale por `bun install --frozen-lockfile`.
 ## Provisionar e iniciar
 
 Na primeira execução, copie [.env.example](../../.env.example) para `.env` sem
-sobrescrever configuração existente. O [README](../../README.md#executar) traz os
-comandos PowerShell. Em Bash, use `cp .env.example .env` somente se ainda não existe.
+sobrescrever configuração existente. Em PowerShell, use
+`if (-not (Test-Path .env)) { Copy-Item .env.example .env }`.
+Em Bash, use `cp .env.example .env` somente se ainda não existe.
 Bun e Compose carregam `.env`; variáveis explícitas do processo podem sobrescrevê-las.
 
 ```sh
@@ -74,9 +75,11 @@ dos efeitos e dos testes de recuperação; ela sinaliza divergência sem corrigi
 
 ## Docker
 
-Migrations são executadas pelo checkout com dependências completas. A imagem de
-produção contém dependências de runtime, usuário bun e entrypoint compilado; não
-contém a CLI de migrations. Bun está fixado por versão/digest no Dockerfile.
+Para avaliação sem Bun no host, use o [Compose da demo](../quickstart.md), com
+jobs de migrations e provisionamento automáticos. O target `migrations` contém
+as dependências completas e a CLI; também é possível executá-la pelo checkout.
+A imagem de produção contém dependências de runtime, usuário bun e entrypoint
+compilado; não contém a CLI de migrations. Bun está fixado por versão/digest no Dockerfile.
 Ao atualizá-lo, alterar packageManager, engines e imagem juntos.
 
 ```sh

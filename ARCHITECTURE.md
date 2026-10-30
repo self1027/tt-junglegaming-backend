@@ -35,9 +35,13 @@ regras; revisão humana ainda é necessária para avaliar semântica.
 | [main.publisher.ts](src/main.publisher.ts)           | PostgreSQL/fila de eventos; publica Outbox confirmada                                         |
 | [main.pending-worker.ts](src/main.pending-worker.ts) | Somente PostgreSQL; resolve operações existentes sem HTTP ou SQS                              |
 
-Cada processo tem pool e ciclo de vida próprios. A API não inicia workers. Compose
-fornece infraestrutura; processos podem ser executados pelo checkout ou pela
-imagem compilada. [Operação local](docs/operations/local-development.md).
+Cada processo tem pool e ciclo de vida próprios. A API não inicia workers.
+O [Compose de demonstração](compose.demo.yaml) usa a mesma imagem compilada para
+os quatro. Um job com a CLI MikroORM aplica migrations depois do healthcheck SQL;
+outro provisiona as filas depois do healthcheck SQS. Processos dependentes esperam
+esses jobs concluírem com sucesso. Runtime não inclui a CLI nem migra no startup.
+O Compose original continua atendendo desenvolvimento e harnesses isolados.
+[Operação local](docs/operations/local-development.md) e [demo](docs/quickstart.md).
 
 ## Fronteiras de commit
 
@@ -61,21 +65,39 @@ financeiros. Finalizações exigem token e lease válido no relógio PostgreSQL.
 
 ## Decisões estruturais
 
-Estas escolhas foram aprovadas nas entregas anteriores; a Task 12 acrescenta a
-proteção SQL de terminais e a instrumentação requerida pelo enunciado. A Task 12.1
-substitui a restrição histórica entre modalidades pela proteção de compensação
-ativa aprovada em [Wagering](docs/domain/wagering.md#políticas-e-reversões).
+MikroORM fornece EntityManager transacional, forks isolados e locks por registro
+no PostgreSQL. Tipos do ORM ficam nos adapters/Platform. Testes de CLI, HTTP e
+Docker exercitam a compatibilidade com Bun.
 
-| Escolha                                 | Motivo e consequência                                                                                                                                                                                                                                         |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| MikroORM/PostgreSQL                     | EntityManager transacional, forks isolados, locks por registro e migrations explícitas. Tipos do ORM ficam nos adapters/Platform. Compatibilidade Bun é exercitada por CLI, HTTP e Docker reais.                                                              |
-| Money em bigint, SQL NUMERIC sem typmod | Unidades de 1/100 evitam erro binário; strings preservam centavos no ORM/JSON. CHECK de escala rejeita excesso em vez de arredondar. Sem teto comercial inventado; limites técnicos do PostgreSQL continuam existindo. [Financial](docs/domain/financial.md). |
-| Lock pessimista por wallet              | FOR UPDATE serializa decisões do mesmo saldo. READ COMMITTED observa estado após espera; comparação de versão na escrita protege contra uso incorreto do adapter. Wallets diferentes avançam em paralelo. Hot wallet limita throughput.                       |
-| Leitura REPEATABLE READ READ ONLY       | Reconciliação lê wallet e ledger no mesmo snapshot, sem bloquear escritores. O histórico completo ainda ocupa memória.                                                                                                                                        |
-| OPENING no armazenamento compartilhado  | Financial grava registro interno por sua própria porta, sem importar Wagering. Abertura positiva começa na versão 1.                                                                                                                                          |
-| Inbox e Outbox persistentes             | Banco sustenta idempotência e atomicidade; broker permanece at-least-once. Não há transação distribuída PostgreSQL/SQS.                                                                                                                                       |
-| Claims com lease/token                  | Falha de processo libera trabalho por expiração; fencing impede finalização pelo dono antigo. Não impede envio duplicado já aceito pelo broker.                                                                                                               |
-| IdP omitido                             | Permitido no §2. [NoAuthGuard](src/bootstrap/no-auth.guard.ts) é o ponto de substituição por guard OIDC com validação de issuer/audience/claims e vínculo do provider. Health continua aberto; SQS permanece canal interno com validação de domínio.          |
+Money usa `bigint` em unidades de 1/100; strings preservam os centavos no ORM e
+nos contratos JSON. SQL usa NUMERIC sem typmod, com CHECK de escala que rejeita
+excesso em vez de arredondar. Não há teto comercial adicional; os limites técnicos
+do PostgreSQL permanecem. [Contrato Financial](docs/domain/financial.md).
+
+`FOR UPDATE` por wallet serializa decisões sobre o mesmo saldo. READ COMMITTED
+observa o estado após a espera, e a comparação de versão na escrita protege
+contra uso incorreto do adapter. Wallets distintas avançam em paralelo; uma
+wallet muito disputada limita throughput. Reconciliação usa REPEATABLE READ
+READ ONLY para ler saldo e ledger no mesmo snapshot, sem bloquear escritores,
+mas ainda carrega o histórico completo em memória.
+
+Financial grava OPENING no armazenamento compartilhado por sua própria porta,
+sem importar Wagering. Abertura positiva começa na versão 1. Inbox e Outbox
+persistentes sustentam idempotência e atomicidade no banco; o broker continua
+at-least-once, sem transação distribuída PostgreSQL/SQS. Claims expiram após
+falha do processo. Token e lease permitem fencing contra finalização pelo dono
+antigo, mas não impedem duplicata de um envio já aceito pelo broker.
+
+Terminais têm proteção SQL. RE-03 distingue unicidade histórica por modalidade
+de compensação direta ativa da BET: após neutralizar REFUND por ROLLBACK,
+a modalidade ROLLBACK ainda inédita pode compensar a BET. A política aprovada,
+suas condições e a evolução da Task 12.1 estão em
+[Wagering](docs/domain/wagering.md#políticas-e-reversões).
+
+Autenticação foi omitida conforme o §2.
+[NoAuthGuard](src/bootstrap/no-auth.guard.ts) é o ponto de substituição por guard
+OIDC com validação de issuer/audience/claims e vínculo do provider. Health continua
+aberto; SQS é canal interno com validação de domínio. Não há IdP entregue.
 
 Migrations são a fonte das constraints e triggers; não há sincronização automática
 de schema. A migration inicial recusa down quando existe ledger confirmado.
