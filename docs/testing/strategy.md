@@ -89,16 +89,21 @@ O [workflow](../../.github/workflows/ci.yml) tem jobs independentes: quality
 executa formatação/types/lint/build; integration executa a suíte completa com
 os harnesses reais; docker-smoke sobe o [Compose independente](../../compose.demo.yaml),
 executa o smoke duas vezes, reinicia os processos e repete a verificação.
-Também exige falha do smoke quando a API está inacessível. Integração recebe
+Compara IDs de nove containers antes/depois dos dois smokes. Também verifica
+atendimento por duas APIs, recriação da terceira com IP diferente sem reiniciar
+o proxy, falha do smoke com Nginx parado e readiness 503/liveness 200 com todas
+as APIs paradas. Recuperação termina com smoke completo. Integração recebe
 30 minutos, incluindo setup/downloads, sem alterar timeouts internos dos testes.
 Logs são guardados como artifacts e recursos descartáveis são removidos em always.
 Resultado remoto deve ser conferido na execução do commit correspondente.
 
 O [smoke](../../docker/smoke.ts) usa HTTP/SQS e SQL somente leitura para conferir
-os registros persistidos. Demonstra 100/80/80, replay histórico/conflito,
+os registros persistidos. Demonstra 100/80/80 em backends distintos, 50 replays
+concorrentes com saldo histórico/conflito,
 duplicata entregue pela Inbox, publicação efetiva de dez eventos da Outbox e
-resolução de REFUND fora de ordem. É uma demonstração curta com uma API; a prova
-de múltiplas instâncias continua nas suítes distribuídas. Comandos, isolamento
+resolução de REFUND fora de ordem. Todo HTTP atravessa Nginx; endereços resolvidos
+por DNS e o header `X-Demo-Upstream` comprovam participação das três APIs.
+Os testes de crash/ACK e fencing continuam nas suítes distribuídas. Comandos, isolamento
 de identidades e consumo dos eventos próprios estão no [quickstart](../quickstart.md).
 
 ## Alcance da evidência

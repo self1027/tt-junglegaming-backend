@@ -1,6 +1,6 @@
 ﻿# Arquitetura do Distributed Wagering Processor
 
-O sistema é um monólito modular hexagonal com quatro processos NestJS/Bun que
+O sistema é um monólito modular hexagonal com quatro tipos de processo NestJS/Bun que
 compartilham PostgreSQL: API, consumer SQS, publisher Outbox e worker de referências.
 O [enunciado](docs/challenge.md) define os requisitos; a
 [matriz](docs/requirements.md) registra sua cobertura e a política de reversões.
@@ -37,11 +37,32 @@ regras; revisão humana ainda é necessária para avaliar semântica.
 
 Cada processo tem pool e ciclo de vida próprios. A API não inicia workers.
 O [Compose de demonstração](compose.demo.yaml) usa a mesma imagem compilada para
-os quatro. Um job com a CLI MikroORM aplica migrations depois do healthcheck SQL;
+três APIs, dois consumers, dois publishers e um worker de referências. Somente
+`api-1` constrói essa imagem runtime. Um job com a CLI MikroORM aplica migrations depois do healthcheck SQL;
 outro provisiona as filas depois do healthcheck SQS. Processos dependentes esperam
 esses jobs concluírem com sucesso. Runtime não inclui a CLI nem migra no startup.
 O Compose original continua atendendo desenvolvimento e harnesses isolados.
 [Operação local](docs/operations/local-development.md) e [demo](docs/quickstart.md).
+
+Na demo, Nginx unprivileged 1.30.6 Alpine, fixado por digest, publica somente
+loopback e distribui HTTP por round-robin entre as três APIs internas na porta 3000. O upstream compartilha estado entre workers do proxy e usa
+[resolução dinâmica](https://nginx.org/en/docs/http/ngx_http_upstream_module.html#resolve)
+pelo DNS Docker para acompanhar recriações. O proxy espera as três APIs saudáveis
+no startup, mas pode atender com duas após uma falha. Liveness verifica o Nginx;
+readiness consulta uma API e suas dependências; ausência de backends retorna 503.
+
+O [proxy](docker/nginx.conf) mantém corpos e headers da aplicação e acrescenta
+`X-Demo-Upstream` com o endereço do backend, sem alterar JSON. Logs de acesso são
+JSON com método, status, backend e tempos, sem payload financeiro. Conexão tem
+timeout de 1 segundo e no máximo três tentativas, sem cache ou
+[retry de POST já enviado](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_next_upstream).
+SIGQUIT permite shutdown gracioso com orçamento de 30 segundos, dentro dos 40
+segundos do Compose. Balanceamento HTTP não coordena dinheiro: locks por wallet,
+idempotência, Inbox e claims de Outbox continuam no PostgreSQL compartilhado.
+Pools e orçamentos por processo são preservados; há mais conexões agregadas.
+
+A topologia da demo é fixa. TLS, Kubernetes, replicação PostgreSQL e autoscaling
+ficam fora deste escopo; Nginx e PostgreSQL continuam pontos únicos de falha.
 
 ## Fronteiras de commit
 

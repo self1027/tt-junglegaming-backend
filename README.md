@@ -17,8 +17,9 @@ docker compose -f compose.demo.yaml up -d --build --wait
 ```
 
 O comando compila a imagem, sobe PostgreSQL/LocalStack, aplica migrations e
-provisiona as filas antes de iniciar API, consumer, publisher e worker de
-referências. Aguarda os healthchecks; a API fica em `http://127.0.0.1:3000`.
+provisiona as filas antes de iniciar três APIs, dois consumers, dois publishers
+da Outbox e um worker de referências. Nginx aguarda as três APIs saudáveis e é o
+único serviço publicado, em `http://127.0.0.1:3000`.
 As credenciais são exemplos locais, sem `.env` obrigatório.
 
 ## Teste a solução
@@ -28,14 +29,17 @@ docker compose -f compose.demo.yaml run --rm smoke
 ```
 
 O smoke cria uma wallet com `100.00 BRL` e envia duas BETs de `80.00` em paralelo:
-uma processa, a outra é rejeitada e o saldo fica em `20.00`, com um único débito.
-Depois confere replay e conflito de payload, entrega duplicada por SQS, eventos
+os headers do Nginx comprovam backends distintos. Uma processa, a outra é
+rejeitada e o saldo fica em `20.00`, com um único débito. Depois confere 50 replays
+concorrentes pelas três APIs, resultado histórico e conflito de payload, entrega duplicada por SQS, eventos
 da Outbox e resolução de REFUND enviado antes da BET.
 
 ```text
+PASS  Readiness through Nginx: …
 PASS  Concurrent bets: 100/80/80; PROCESSED …, REJECTED …
 PASS  Ledger and reconciliation: 20.00 BRL, one debit
 PASS  Idempotent replay and divergent payload conflict
+PASS  50 concurrent historical replays: …
 PASS  SQS processing: …
 PASS  Pending reference resolution: …
 PASS  Transactional Outbox: 10 matching eventIds received; …
@@ -77,9 +81,13 @@ imagens e pode levar vários minutos. Veja a [estratégia de testes](docs/testin
 
 ## Arquitetura e limitações
 
-Monólito modular hexagonal com quatro processos independentes. Financial mantém
+Monólito modular hexagonal com quatro tipos de processo independentes. Financial mantém
 saldo/ledger; Wagering coordena operações; adapters implementam HTTP, SQL e SQS.
 Bun, TypeScript strict, NestJS e MikroORM compõem a aplicação.
+
+Nginx faz round-robin HTTP; PostgreSQL coordena saldo, idempotência e claims entre
+instâncias. Os dois publishers publicam na fila de eventos; o worker de referências
+é separado. A topologia é fixa, sem TLS, Kubernetes, replicação do banco ou autoscaling.
 
 Eventos têm entrega at-least-once: consumidores precisam deduplicar por `eventId`.
 Autenticação foi omitida conforme o desafio, com ponto de extensão para IdP.

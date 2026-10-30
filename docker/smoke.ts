@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { lookup } from 'node:dns/promises';
 import { SQL } from 'bun';
 import {
 	SQSClient,
@@ -56,7 +57,16 @@ const required = (key: string): string => {
 	assert(value !== undefined && value !== '', `Missing ${key}`);
 	return value;
 };
-const base = process.env.API_BASE_URL ?? 'http://api:3000';
+const base = process.env.API_BASE_URL ?? 'http://nginx:8080';
+const expectedUpstreams = new Set<string>();
+function upstream(response: Response): string {
+	const address = response.headers.get('X-Demo-Upstream');
+	assert(address !== null, 'Missing proxy-generated X-Demo-Upstream');
+	// Earlier connection attempts can still reference an address being replaced.
+	const backend = address.split(',').at(-1)?.trim() ?? '';
+	assert(expectedUpstreams.has(backend), `Unexpected upstream ${address}`);
+	return backend;
+}
 const timeoutMs = Number(process.env.SMOKE_TIMEOUT_MS ?? '45000');
 assert(
 	Number.isSafeInteger(timeoutMs) && timeoutMs > 0,
@@ -71,6 +81,7 @@ async function http<T>(
 	status: number,
 	body?: unknown,
 	key?: string,
+	observed?: Set<string>,
 ): Promise<T> {
 	const response = await fetch(`${base}${path}`, {
 		method: body === undefined ? 'GET' : 'POST',
@@ -81,6 +92,8 @@ async function http<T>(
 		...(body === undefined ? {} : { body: JSON.stringify(body) }),
 		signal: AbortSignal.timeout(5000),
 	});
+	const address = upstream(response);
+	observed?.add(address);
 	const result = (await response.json()) as T;
 	assert.equal(
 		response.status,
@@ -133,12 +146,17 @@ const outbox = async (): Promise<Outbox[]> => sql<Outbox[]>`
 	select event_id, status, payload from outbox_messages
 	where payload->'data'->>'walletId' = ${walletId} order by event_id`;
 const facts = (rows: Outbox[]): Event[] => rows.map(row => row.payload);
-const submit = (wager: Wager, status = 200): Promise<Result> =>
+const submit = (
+	wager: Wager,
+	status = 200,
+	observed?: Set<string>,
+): Promise<Result> =>
 	http(
 		'/wagering/transactions',
 		status,
 		wager,
 		`${providerId}:${wager.externalTransactionId}`,
+		observed,
 	);
 const wager = (kind: string, amount: string): Wager => ({
 	providerId,
@@ -183,7 +201,29 @@ async function ledger(): Promise<Entry[]> {
 	return result.items;
 }
 async function main(): Promise<void> {
-	await http('/health/ready', 200);
+	for (const name of ['api-1', 'api-2', 'api-3']) {
+		const addresses = await lookup(name, { all: true, family: 4 });
+		assert.equal(addresses.length, 1, `One IPv4 address for ${name}`);
+		for (const { address } of addresses)
+			expectedUpstreams.add(`${address}:3000`);
+	}
+	assert.equal(expectedUpstreams.size, 3, 'Three independent API addresses');
+	const readyUpstreams = new Set<string>();
+	await until(
+		'Readiness must reach all three APIs through Nginx',
+		async () => {
+			await http(
+				'/health/ready',
+				200,
+				undefined,
+				undefined,
+				readyUpstreams,
+			);
+			return readyUpstreams.size === 3;
+		},
+	);
+	assert.deepEqual(readyUpstreams, expectedUpstreams);
+	pass(`Readiness through Nginx: ${[...readyUpstreams].join(', ')}`);
 	const wallet = await http<{ id: string; balance: Money }>('/wallets', 201, {
 		playerId,
 		initialBalance: money('100.00'),
@@ -211,8 +251,13 @@ async function main(): Promise<void> {
 				response.status,
 				result.status === 'PROCESSED' ? 200 : 422,
 			);
-			return { bet, result };
+			return { bet, result, upstream: upstream(response) };
 		}),
+	);
+	assert.equal(
+		new Set(responses.map(item => item.upstream)).size,
+		2,
+		'Concurrent BETs must reach distinct API backends',
 	);
 	const processed = responses.filter(
 		item => item.result.status === 'PROCESSED',
@@ -228,7 +273,7 @@ async function main(): Promise<void> {
 	assert.equal(winner.result.idempotentReplay, false);
 	assert.deepEqual(winner.result.balance, money('20.00'));
 	pass(
-		`Concurrent bets: 100/80/80; PROCESSED ${winner.result.transactionId}, REJECTED ${rejected[0].result.transactionId}`,
+		`Concurrent bets: 100/80/80; PROCESSED ${winner.result.transactionId}, REJECTED ${rejected[0].result.transactionId}; backends ${responses.map(item => item.upstream).join(', ')}`,
 	);
 	await reconcile('20.00', 2);
 	const entries = await ledger();
@@ -335,9 +380,40 @@ async function main(): Promise<void> {
 		'SQS duplicate must not create extra events',
 	);
 	// A later balance change proves the replay is a historical snapshot.
-	assert.deepEqual(await submit(winner.bet), replay);
+	const beforeReplayLedger = await ledger();
+	const beforeReplayFacts = facts(await outbox());
+	const replayUpstreams = new Set<string>();
+	const replays = await Promise.all(
+		Array.from({ length: 50 }, () =>
+			submit(winner.bet, 200, replayUpstreams),
+		),
+	);
+	for (const result of replays)
+		assert.deepEqual(
+			result,
+			replay,
+			'Concurrent replay preserves historical result',
+		);
+	assert.deepEqual(
+		replayUpstreams,
+		expectedUpstreams,
+		'Replays reach all three APIs',
+	);
+	assert.deepEqual(
+		await ledger(),
+		beforeReplayLedger,
+		'No new replay ledger entries',
+	);
+	assert.deepEqual(
+		facts(await outbox()),
+		beforeReplayFacts,
+		'No new replay events',
+	);
 	await reconcile('25.00', 3);
 	assert.equal((await outbox()).length, 5);
+	pass(
+		`50 concurrent historical replays: ${[...replayUpstreams].join(', ')}; same transactionId, no new debit/event`,
+	);
 	pass(
 		`SQS processing: ${sqsResult.transactionId}, duplicate delivered twice, balance 25.00 BRL; replay still 20.00`,
 	);

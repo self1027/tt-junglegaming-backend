@@ -41,7 +41,66 @@ x-worker-health: &worker-health
     retries: 30
     start_period: 5s
 
+x-api: &api
+    <<: *app
+    command: [bun, --preload, ./docker/json-logger.ts, dist/main.api.js]
+    healthcheck:
+        test:
+            - CMD
+            - bun
+            - -e
+            - 'const r = await fetch("http://127.0.0.1:3000/health/ready", {signal: AbortSignal.timeout(2000)}); process.exit(r.ok ? 0 : 1)'
+        interval: 2s
+        timeout: 3s
+        retries: 30
+        start_period: 5s
+
+x-consumer: &consumer
+    <<: *app
+    command: [bun, docker/worker.ts, consumer]
+    environment:
+        <<: *environment
+        # LocalStack can retain an abandoned long poll after a process restart.
+        SQS_WAIT_SECONDS: '1'
+    healthcheck: *worker-health
+
+x-publisher: &publisher
+    <<: *app
+    command: [bun, docker/worker.ts, publisher]
+    healthcheck: *worker-health
+
 services:
+    nginx:
+        image: nginxinc/nginx-unprivileged:1.30.6-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03
+        ports:
+            - '127.0.0.1:${DEMO_PORT:-3000}:8080'
+        volumes:
+            - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+        stop_signal: SIGQUIT
+        stop_grace_period: 40s
+        depends_on:
+            api-1:
+                condition: service_healthy
+            api-2:
+                condition: service_healthy
+            api-3:
+                condition: service_healthy
+        healthcheck:
+            test:
+                [
+                    CMD,
+                    wget,
+                    -q,
+                    -O,
+                    /dev/null,
+                    -T,
+                    '2',
+                    'http://127.0.0.1:8080/health/live',
+                ]
+            interval: 2s
+            timeout: 3s
+            retries: 30
+            start_period: 5s
     postgres:
         image: postgres:18.3-bookworm@sha256:80630f83606d8db77d30b3851b16a9f78be2d0d4dda6f7b82a1fdca5ebe3acba
         environment:
@@ -87,36 +146,23 @@ services:
             localstack:
                 condition: service_healthy
         restart: 'no'
-    api:
-        <<: *app
+    api-1:
+        <<: *api
         build:
             context: .
             target: runtime
-        command: [bun, --preload, ./docker/json-logger.ts, dist/main.api.js]
-        ports:
-            - '127.0.0.1:${DEMO_PORT:-3000}:3000'
-        healthcheck:
-            test:
-                - CMD
-                - bun
-                - -e
-                - 'const r = await fetch("http://127.0.0.1:3000/health/ready", {signal: AbortSignal.timeout(2000)}); process.exit(r.ok ? 0 : 1)'
-            interval: 2s
-            timeout: 3s
-            retries: 30
-            start_period: 5s
-    consumer:
-        <<: *app
-        command: [bun, docker/worker.ts, consumer]
-        environment:
-            <<: *environment
-            # LocalStack can retain an abandoned long poll after a process restart.
-            SQS_WAIT_SECONDS: '1'
-        healthcheck: *worker-health
-    publisher:
-        <<: *app
-        command: [bun, docker/worker.ts, publisher]
-        healthcheck: *worker-health
+    api-2:
+        <<: *api
+    api-3:
+        <<: *api
+    consumer-1:
+        <<: *consumer
+    consumer-2:
+        <<: *consumer
+    publisher-1:
+        <<: *publisher
+    publisher-2:
+        <<: *publisher
     pending-worker:
         <<: *app
         command: [bun, docker/worker.ts, pending-worker]
@@ -132,7 +178,7 @@ services:
         command: [bun, docker/smoke.ts]
         environment:
             <<: *environment
-            API_BASE_URL: http://api:3000
+            API_BASE_URL: http://nginx:8080
         # Attach to the stack started by up; run must never recreate its processes.
         depends_on: {}
 
