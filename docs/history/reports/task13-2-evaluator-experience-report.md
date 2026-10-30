@@ -80,15 +80,18 @@ as relações. O índice derivado não substituiu conferência das fontes.
 
 ## CI, PR e pendências
 
-O workflow está configurado e os SHAs das actions foram conferidos nas tags
-oficiais. **CI remoto ainda não verificado**: publicação depende da autorização
-de push solicitada pelo usuário. PR ainda não aberto. Não há alegação de checks
-verdes, merge ou integração em main.
+Push e abertura do PR foram autorizados após a validação local. A branch foi
+publicada e o [PR #1](https://github.com/self1027/tt-junglegaming-backend/pull/1)
+reúne o histórico completo das Tasks anteriores com esta entrega, sem conflitos
+com main na conferência remota.
 
-Depois da autorização: publicar `feat/evaluator-experience`, abrir PR para main,
-acompanhar a execução do commit e corrigir falhas comprovadas. O PR inclui o
-histórico completo das Tasks anteriores. Merge continua exigindo autorização
-explícita separada. A Task só estará concluída após CI verde e PR pronto.
+Os SHAs das actions foram conferidos nas tags oficiais. O workflow executa em
+pull requests e pushes na main; isso evita duplicar a suíte quando uma branch é
+publicada e seu PR é aberto. Resultados remotos pertencem aos
+[checks do commit no PR](https://github.com/self1027/tt-junglegaming-backend/pull/1/checks)
+e à descrição atualizada do PR, que registra a execução acompanhada. Resultados
+locais não substituem essa evidência. A Task exige os três jobs concluídos com
+sucesso; merge continua pendente de autorização explícita separada.
 
 ## Limitações e execução pelo avaliador
 

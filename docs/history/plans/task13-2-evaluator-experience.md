@@ -3,7 +3,7 @@
 Origem: `fix/reversal-re03-conformance`, commit `7448fd4`. Checkout e index
 limpos na inspeção inicial. Trabalho em `feat/evaluator-experience`, preservando
 o histórico. Escopo e execução autorizados pela solicitação da Task 13.2;
-push depende de autorização e merge não está autorizado.
+push foi autorizado após a validação local; merge não está autorizado.
 
 ## Investigação
 
@@ -62,5 +62,6 @@ e autorização antes de alteração financeira.
 
 ## Estado da entrega
 
-Validação local concluída; CI configurado. Publicação, CI remoto e PR aguardam
-autorização de push. Evidências no [relatório](../reports/task13-2-evaluator-experience-report.md).
+Validação local concluída; branch publicada e PR #1 aberto após autorização.
+O CI é acompanhado nos checks do PR. Evidências no
+[relatório](../reports/task13-2-evaluator-experience-report.md).
