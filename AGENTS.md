@@ -1,6 +1,6 @@
 # Distributed Wagering Processor
 
-Serviço financeiro distribuído da Jungle Gaming. Preserve correção financeira, rastreabilidade e recuperação entre instâncias. O estado atual inclui persistência, domínios Financial/Wagering, ProcessWagerUseCase, Outbox transacional, API HTTP com abertura/consultas/reconciliação por snapshot e consumer SQS FIFO independente com Inbox/ACK após commit. Readiness verifica PostgreSQL/SQS/FIFO/redrive/DLQ. Publisher independente com claims/lease/fencing está implementado; worker de referências está implementado na Task 11; componentes planejados não são funcionalidades entregues. [Operação SQS](docs/sqs-consumer.md), [publisher](docs/outbox-publisher.md) e [worker de referências](docs/pending-reference-worker.md).
+Serviço financeiro distribuído da Jungle Gaming. Preserve correção financeira, rastreabilidade e recuperação entre instâncias. O estado atual inclui persistência, domínios Financial/Wagering, ProcessWagerUseCase, Outbox transacional, API HTTP com abertura/consultas/reconciliação por snapshot e consumer SQS FIFO independente com Inbox/ACK após commit. Readiness verifica PostgreSQL/SQS/FIFO/redrive/DLQ. Publisher independente com claims/lease/fencing está implementado; worker de referências está implementado na Task 11; componentes planejados não são funcionalidades entregues. [Operação SQS](docs/operations/consumer.md), [publisher](docs/operations/publisher.md) e [worker de referências](docs/operations/pending-worker.md).
 
 ## Fontes e contexto
 
@@ -19,7 +19,7 @@ Antes de implementar: identifique o escopo pelo grafo; leia o `AGENTS.md` local;
 
 ## Stack e fronteiras
 
-NestJS, TypeScript strict, Bun 1.x (versão fixada no package.json), ESLint strict type-aware e Prettier com tabs/largura 4. PostgreSQL/MikroORM e SQS FIFO/LocalStack em Compose implementados; publisher independente implementado; worker de referências é etapa seguinte. Schema e limites estão em [docs/persistence.md](docs/persistence.md).
+NestJS, TypeScript strict, Bun 1.x (versão fixada no package.json), ESLint strict type-aware e Prettier com tabs/largura 4. PostgreSQL/MikroORM e SQS FIFO/LocalStack em Compose implementados; publisher e worker de referências independentes implementados. Schema e limites estão em [docs/persistence.md](docs/persistence.md). Navegação atual: [docs/index.md](docs/index.md); conformidade e limitações: [docs/requirements.md](docs/requirements.md).
 
 Siga as dependências de [ARCHITECTURE.md](ARCHITECTURE.md): domínio independente de frameworks, aplicação por contratos, adapters por portas, acesso entre módulos apenas por `public`, Financial independente de Wagering e composição em bootstrap. Não relaxe verificações para acomodar uma implementação. Não crie TypeScript para preencher pastas nem agentes autônomos sem necessidade.
 
