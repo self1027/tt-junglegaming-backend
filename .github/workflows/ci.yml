@@ -1,0 +1,109 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ci-${{ github.head_ref || github.ref_name }}
+    cancel-in-progress: true
+
+defaults:
+    run:
+        shell: bash
+
+jobs:
+    quality:
+        runs-on: ubuntu-24.04
+        timeout-minutes: 10
+        steps:
+            - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+            - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+              with:
+                  bun-version: 1.4.4
+            - run: bun install --frozen-lockfile
+            - run: bun run format:check
+            - run: bun run typecheck
+            - run: bun run lint
+            - run: bun run build
+
+    integration:
+        runs-on: ubuntu-24.04
+        timeout-minutes: 30
+        env:
+            COMPOSE_PARALLEL_LIMIT: '2'
+        steps:
+            - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+            - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+              with:
+                  bun-version: 1.4.4
+            - run: bun install --frozen-lockfile
+            - run: docker version && docker compose version
+            - name: Full suite with real PostgreSQL and LocalStack
+              run: bun run test 2>&1 | tee integration.log
+            - name: Remove disposable test resources
+              if: always()
+              run: |
+                  mapfile -t containers < <(docker ps -aq --filter 'name=^/dwp-')
+                  if ((${#containers[@]})); then docker rm -f "${containers[@]}"; fi
+                  mapfile -t networks < <(docker network ls -q --filter label=com.docker.compose.project)
+                  if ((${#networks[@]})); then docker network rm "${networks[@]}"; fi
+                  mapfile -t volumes < <(docker volume ls -q --filter label=com.docker.compose.project)
+                  if ((${#volumes[@]})); then docker volume rm "${volumes[@]}"; fi
+            - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+              if: always()
+              with:
+                  name: integration-log
+                  path: integration.log
+                  retention-days: 7
+
+    docker-smoke:
+        runs-on: ubuntu-24.04
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+            - name: Start from a fresh Docker project
+              run: docker compose -f compose.demo.yaml up -d --build --wait --wait-timeout 180
+            - name: Smoke twice with unique identities
+              run: |
+                  docker compose -f compose.demo.yaml ps -q api consumer publisher pending-worker | sort > demo-containers-before.txt
+                  docker compose -f compose.demo.yaml run --rm smoke
+                  docker compose -f compose.demo.yaml run --rm smoke
+                  docker compose -f compose.demo.yaml ps -q api consumer publisher pending-worker | sort > demo-containers-after.txt
+                  diff -u demo-containers-before.txt demo-containers-after.txt
+            - name: Repeated startup and graceful restart
+              run: |
+                  docker compose -f compose.demo.yaml up -d --wait --wait-timeout 180
+                  docker compose -f compose.demo.yaml restart api consumer publisher pending-worker
+                  docker compose -f compose.demo.yaml up -d --wait --wait-timeout 180
+                  docker compose -f compose.demo.yaml run --rm smoke
+            - name: Smoke must fail against an unavailable API
+              run: |
+                  if docker compose -f compose.demo.yaml run --rm --no-deps -e API_BASE_URL=http://api:1 smoke; then
+                    echo 'Smoke incorrectly accepted an unavailable API'
+                    exit 1
+                  fi
+            - name: Collect diagnostics
+              if: always()
+              run: |
+                  docker compose -f compose.demo.yaml ps -a > demo-status.log
+                  docker compose -f compose.demo.yaml logs --no-color > demo.log
+            - name: Stop and remove the disposable demo
+              if: always()
+              run: docker compose -f compose.demo.yaml down --volumes --remove-orphans
+            - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+              if: always()
+              with:
+                  name: demo-logs
+                  path: |
+                      demo.log
+                      demo-status.log
+                      demo-containers-before.txt
+                      demo-containers-after.txt
+                  retention-days: 7

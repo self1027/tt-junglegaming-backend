@@ -17,7 +17,10 @@ export interface WalletRepository {
 export interface WalletLedgerRepository {
 	append(entry: WalletLedgerEntry): Promise<void>;
 	/** Ascending createdAt, then id; timestamps alone are not unique. */
-	findByWalletId(walletId: string): Promise<readonly WalletLedgerEntry[]>;
+	findByWalletId(
+		walletId: string,
+		page?: { readonly afterId?: string; readonly limit: number },
+	): Promise<readonly WalletLedgerEntry[]>;
 }
 
 export interface OpeningTransaction {
@@ -42,7 +45,10 @@ export interface UnitOfWork<
 	Context extends FinancialTransactionContext = FinancialTransactionContext,
 > {
 	/** Resolves after commit; rejects after rollback. Context cannot escape the callback. */
-	execute<T>(work: (context: Context) => Promise<T>): Promise<T>;
+	execute<T>(
+		work: (context: Context) => Promise<T>,
+		options?: { readonly readOnly: true },
+	): Promise<T>;
 }
 
 export const UNIT_OF_WORK = Symbol('UnitOfWork');

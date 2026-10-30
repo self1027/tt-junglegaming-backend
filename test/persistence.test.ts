@@ -87,10 +87,20 @@ describe('PostgreSQL foundation', () => {
 	test('applies on an empty database, down/up is reversible with disposable data', async () => {
 		expect(
 			(await orm.migrator.getExecuted()).map(entry => entry.name),
-		).toEqual(['Migration202610280001']);
+		).toEqual([
+			'Migration202610280001',
+			'Migration202610280002',
+			'Migration202610290001',
+			'Migration202610290002',
+			'Migration202610290003',
+			'Migration202610290004',
+		]);
 		expect(await orm.migrator.getPending()).toHaveLength(0);
 		await orm.em.fork().persist(wallet()).flush();
-		await command([process.execPath, 'run', 'db:rollback'], database().env);
+		await command(
+			[process.execPath, 'run', 'db:rollback', '--to', '0'],
+			database().env,
+		);
 		const tables = await orm.em.execute<{ name: string | null }[]>(
 			"select to_regclass('wallets')::text as name",
 		);
@@ -233,14 +243,22 @@ describe('PostgreSQL foundation', () => {
 		expect(row.id).toBe(transaction.walletId);
 	});
 
-	test('limits successful reversals by reference and kind without hiding rejected attempts', async () => {
+	test('limits successful direct reversals across kinds without hiding rejected attempts', async () => {
 		const { transaction } = await seed();
+		await orm.em
+			.fork()
+			.nativeUpdate(
+				WagerTransactionRow,
+				{ id: transaction.id },
+				{ status: 'PROCESSED', processedAt: new Date() },
+			);
 		const reversal = {
 			...transaction,
 			id: uuid(),
 			externalTransactionId: uuid(),
 			kind: 'REFUND' as const,
 			status: 'PROCESSED' as const,
+			processedAt: new Date(),
 			referenceTransactionId: transaction.id,
 			referenceExternalTransactionId: transaction.externalTransactionId,
 		};
@@ -252,17 +270,24 @@ describe('PostgreSQL foundation', () => {
 				externalTransactionId: uuid(),
 			}),
 		).rejects.toMatchObject({ code: '23505' });
-		await orm.em.fork().insert(WagerTransactionRow, {
-			...reversal,
-			id: uuid(),
-			externalTransactionId: uuid(),
-			kind: 'ROLLBACK',
+		expect(
+			orm.em.fork().insert(WagerTransactionRow, {
+				...reversal,
+				id: uuid(),
+				externalTransactionId: uuid(),
+				kind: 'ROLLBACK',
+			}),
+		).rejects.toMatchObject({
+			code: '23514',
+			constraint: 'wager_active_bet_compensation_check',
 		});
 		await orm.em.fork().insert(WagerTransactionRow, {
 			...reversal,
 			id: uuid(),
 			externalTransactionId: uuid(),
 			status: 'REJECTED',
+			processedAt: null,
+			failureCode: 'CUMULATIVE_REVERSAL_NOT_ALLOWED',
 		});
 	});
 
@@ -504,7 +529,7 @@ describe('PostgreSQL foundation', () => {
 			'55000',
 		);
 		violation('truncate wallet_ledger_entries', [], '55000');
-		expect(orm.migrator.down()).rejects.toThrow(
+		expect(orm.migrator.down({ to: 0 })).rejects.toThrow(
 			'Cannot revert foundation with confirmed ledger entries',
 		);
 		expect(

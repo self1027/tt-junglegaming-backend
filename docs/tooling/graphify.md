@@ -10,24 +10,27 @@ Fontes oficiais: [repositório Graphify-Labs/graphify](https://github.com/Graphi
 
 ## Instalação reproduzível
 
-Na raiz do projeto, com Python disponível, use PowerShell:
+Instale uv pelo [distribuidor oficial](https://docs.astral.sh/uv/getting-started/installation/), sem depender do alias `python` da Microsoft Store. Em PowerShell, a instalação oficial fixada é:
 
 ```powershell
-python -m pip install --user uv
-python -m uv tool install --python 3.12 graphifyy==0.9.97
-python -m uv tool update-shell
+powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/0.13.6/install.ps1 | iex"
+$env:PATH = "$env:USERPROFILE/.local/bin;$env:USERPROFILE/.bun/bin;$env:PATH"
+uv tool install --python 3.12 graphifyy==0.9.97
+uv tool update-shell
 ```
 
-Abra outro terminal depois da atualização do PATH. Se precisar continuar no PowerShell atual, acrescente o diretório de executáveis informado pelo uv; nesta instalação foi:
+Também é possível baixar o binário Windows da release oficial e conferir seu SHA-256 antes de copiar uv/uvx/uvw para `.local/bin`, como feito na [recuperação registrada](../history/reports/tooling-recovery-report.md#graphify). Não é necessário instalar Python global: uv resolve o Python 3.12 isolado. Abra outro terminal e **reinicie o Codex desktop** depois de alterar o PATH; processos já abertos conservam o ambiente anterior. Para continuar no PowerShell atual:
 
 ```powershell
-$env:PATH = "$env:USERPROFILE/.local/bin;$env:PATH"
+$env:PATH = "$env:USERPROFILE/.local/bin;$env:USERPROFILE/.bun/bin;$env:PATH"
+$env:PYTHONUTF8 = '1'
+$env:GRAPHIFY_NO_AUTO_REFRESH = '1'
 graphify --version
 ```
 
-uv instala o Python compatível quando necessário e mantém o CLI em ambiente isolado. A skill local é mantida neste repositório; não é necessário executar o gerador de integração do Graphify. Reexecutar `graphify install --project --platform codex` pode substituir essa skill e acrescentar instruções/hooks que precisam de revisão. Não altere configurações globais do Codex ou habilite multi-agent para este fluxo.
+uv instala o Python compatível quando necessário e mantém o CLI em ambiente isolado. A skill local é mantida neste repositório; não é necessário executar o gerador de integração do Graphify nem acrescentar AGENTS/hooks. O CLI 0.9.97 pode atualizar automaticamente a skill global `~/.codex/skills/graphify` durante comandos comuns; `GRAPHIFY_NO_AUTO_REFRESH=1` evita essa alteração quando se deseja somente consultar/atualizar o índice. Não habilite multi-agent ou backends para esse fluxo.
 
-Atualizações de versão são uma tarefa explícita: revise release/CLI, atualize a versão documentada, reinstale com a versão escolhida e valide construção, consultas e descoberta da skill. Para remover somente o CLI: `python -m uv tool uninstall graphifyy`; isso não remove a documentação/skill local.
+Atualizações de versão são uma tarefa explícita: revise release/CLI, atualize a versão documentada, reinstale com a versão escolhida e valide construção, consultas e descoberta da skill. Para remover somente o CLI: `uv tool uninstall graphifyy`; isso não remove a documentação/skill local.
 
 ## Comandos do projeto
 

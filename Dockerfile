@@ -10,6 +10,10 @@ COPY tsconfig.json tsconfig.build.json build.ts ./
 COPY src ./src
 RUN bun run build
 
+FROM build AS migrations
+USER bun
+CMD ["bun", "run", "db:migrate"]
+
 FROM base AS production-dependencies
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
@@ -20,6 +24,7 @@ ENV PORT=3000
 COPY --from=production-dependencies --chown=bun:bun /app/node_modules ./node_modules
 COPY --from=build --chown=bun:bun /app/dist ./dist
 COPY --chown=bun:bun package.json ./
+COPY --chown=bun:bun docker ./docker
 USER bun
 EXPOSE 3000
 CMD ["bun", "dist/main.api.js"]

@@ -21,9 +21,11 @@ export async function command(
 }
 
 export interface TestPostgres {
+	readonly network: string;
 	env: NodeJS.ProcessEnv;
 	config: Options;
 	close: () => Promise<void>;
+	control: (action: 'stop' | 'start') => Promise<void>;
 }
 
 export async function startPostgres(): Promise<TestPostgres> {
@@ -65,7 +67,24 @@ export async function startPostgres(): Promise<TestPostgres> {
 			throw new Error('Cannot resolve test PostgreSQL port');
 		}
 		env.POSTGRES_PORT = port;
-		return { env, config: persistenceConfig(env), close };
+		return {
+			network: `${project}_default`,
+			env,
+			config: persistenceConfig(env),
+			close,
+			control: async (action): Promise<void> => {
+				await command(
+					[
+						...compose,
+						...(action === 'start'
+							? ['up', '-d', '--wait', '--wait-timeout', '60']
+							: ['stop']),
+						'postgres',
+					],
+					env,
+				);
+			},
+		};
 	} catch (error) {
 		await close();
 		throw error;

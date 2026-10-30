@@ -1,57 +1,114 @@
-# Messaging: entrada, eventos e recuperação
+﻿# Messaging: Inbox, ACK e publicação recuperável
 
-Requisitos **explícitos** dos §§3, 5, 6.0, 6.5, 7.1 e 9–13 de [challenge.md](../challenge.md), fonte primária imutável. Fronteiras/processos são decisões de [ARCHITECTURE.md](../../ARCHITECTURE.md). Componentes abaixo estão planejados, não implementados.
+Entrada e saída são at-least-once. O banco coordena os efeitos financeiros e
+registra a intenção de publicar no mesmo commit; SQS não participa da transação SQL.
+[Envelope de comandos](../contracts/sqs-commands.md) e
+[eventos versionados](../contracts/integration-events.md) são os contratos externos.
 
-## Entradas HTTP e SQS (§§9–10)
+## Inbox e ACK
 
-HTTP valida/adapta a entrada e chama ProcessWagerUseCase, retornando resultado síncrono do caso de uso, inclusive status pendente quando aplicável. Endpoints, header e categorias HTTP ficam em [requirements.md](../requirements.md); hash/replay em [Wagering](wagering.md). HTTP também registra Outbox atomicamente, sem publicar antes de commit.
+Deduplicação de transporte usa `(consumerName, messageId)` do envelope, com
+`consumerName = wagering-v1`. O ID nativo do broker e ReceiptHandle não são
+identidade financeira. Mensagens diferentes podem representar a mesma operação;
+a idempotência de [Wagering](wagering.md#entrada-saída-e-identidade) continua necessária.
 
-Entrada SQS FIFO: `wager-transactions.fifo`, com `wager-transactions-dlq.fifo`. O envelope de entrada é `{ messageId, type: "WagerTransactionRequested", occurredAt, data }`; data contém providerId, externalTransactionId, idempotencyKey, playerId, walletId, roundId, gameId, kind, money e referência quando exigida. occurredAt é timestamp conforme exemplo ISO-8601. A identidade messageId do envelope e o identificador nativo do broker não devem ser confundidos; o mapeamento definitivo precisa ser documentado.
+O [parser](../../src/modules/wagering/adapters/sqs/wager-message.ts) adapta data.money
+para command.amount e calcula SHA-256 UTF-8 do JSON explícito, ordenado por chaves:
+`data`, `messageId`, `occurredAt`, `type`. Data contém `externalTransactionId`,
+`gameId`, `idempotencyKey`, `kind`, `money`, `playerId`, `providerId`,
+`referenceExternalTransactionId`, `roundId`, `walletId`. Money é canônico; walletId
+fica minúsculo; referência ausente/null vira null. Texto e representação occurredAt
+são preservados. Alterar timestamp do mesmo envelope conflita mesmo se representar
+o mesmo instante. Esse hash inclui transporte/key e difere do hash de negócio.
 
-Consumer separa recebimento de processamento: adapta mensagem, deduplica Inbox, chama **o mesmo use case HTTP**, confirma transação e só então ACK (remoção da mensagem). Fila é canal interno confiável para autenticação, mas provider continua validado pelo domínio (§2). OPENING externo é proibido (§6.3).
+[InboxRepository](../../src/modules/wagering/public/inbox.ts) expõe claim/complete.
+O [adapter](../../src/modules/wagering/adapters/persistence/mikro-orm-inbox.repository.ts)
+usa INSERT ON CONFLICT e FOR UPDATE, compara hash/estado e participa da mesma
+TransactionSession financeira. Ordem: Inbox, idempotência, identidade externa,
+wallet, referências/histórico. Não há commit próprio ou lease Inbox persistente.
 
-## Inbox e atomicidade (§§6.5, 10–11)
+RECEIVED novo existe dentro da transação; rollback/crash elimina claim e efeitos.
+RECEIVED legado confirmado pode ser retomado sob lock. PROCESSED/hash igual retorna
+duplicata antes do motor. Attempts conta participações confirmadas, inclusive
+duplicatas; não conta recebimentos/rollbacks. Erros de tentativas revertidas ficam
+nos logs e no receive count/DLQ do broker, sem commit técnico separado.
 
-Deduplicação persistente por `(consumerName, messageId)`, sem depender somente do FIFO ou memória. Modelo de referência registra payloadHash, receivedAt, processedAt e transição markProcessed; usar factories/rehydrate conforme §6.0.
+| Resultado                                                   | Persistência e transporte                                                |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------ |
+| PROCESSED, REJECTED, PENDING, PENDING_REFERENCE             | Inbox PROCESSED no mesmo commit; depois ACK                              |
+| Duplicata Inbox/hash igual                                  | Commit da participação; depois ACK; sem novo efeito                      |
+| JSON/envelope/identidade/Money inválidos                    | Sem processamento/ACK; redrive nativa                                    |
+| Conflito Inbox/key/identidade externa ou wallet inexistente | Permanente, rollback, sem ACK; redrive                                   |
+| SQL/conexão/deadlock/erro inesperado ou key IN_PROGRESS     | Transitório para transporte; rollback, retry por visibilidade/redelivery |
+| DeleteMessage falho/incerto                                 | Commit preservado; próximo recebimento usa Inbox                         |
 
-Inbox, idempotência/transação, saldo, ledger e Outbox aplicáveis participam da **mesma transação SQL**. O significado preciso de Inbox processada para resultado pendente e a reação a mesmo messageId com hash divergente estão pendentes; não inventar ACK antecipado ou descartar divergência silenciosamente.
+Inbox PROCESSED significa entrada aceita duravelmente, inclusive pendência. O
+worker SQL resolve a referência depois; redelivery não repete esse trabalho.
+A Promise do use case só resolve após commit; [ReliableConsumer](../../src/platform/messaging/reliable-consumer.ts)
+então tenta DeleteMessage. Acknowledgement não é coordenado atomicamente com SQL;
+crash entre os dois exige deduplicação persistente.
 
-Inbox deduplica entrega do transporte. Idempotência de negócio identifica operação/payload e recupera resultado original; mensagens distintas podem representar a mesma operação. Ambas devem funcionar sob concorrência e reinicialização.
+O consumer recebe uma mensagem por chamada, com pollers concorrentes. Isso evita
+que poison gaste tentativas de sucessoras no mesmo batch. Visibilidade é renovada
+até o deadline; perder renovação/prazo adia ACK mesmo se o commit ocorreu.
+Falha usa backoff `min(visibilitySeconds, 2^receiveCount)`, com expoente limitado a 8.
+SQS limita entregas pela redrive; erros permanentes também permanecem sem ACK até
+chegar à DLQ. Receive count é aproximado e não equivale a attempts SQL.
+[Parâmetros, sinais e recuperação](../operations/consumer.md).
 
-## Outbox e publicação (§§6.5, 11)
+## Outbox transacional
 
-Evento confirmado é persistido com efeitos financeiros no commit. Worker publica depois, com múltiplos publishers concorrentes, sem perder eventos nem duplicá-los indefinidamente. Modelo de referência inclui id, aggregateId, eventType, payload readonly, occurredAt, attempts, nextAttemptAt e publishedAt; consultas pending/due e transições de publicação/retry com backoff.
+[OutboxRepository](../../src/modules/wagering/public/events.ts) recebe eventos
+tipados. O [adapter de inserção](../../src/modules/wagering/adapters/persistence/mikro-orm-outbox.repository.ts)
+persiste o envelope completo JSONB na mesma sessão de transação/saldo/ledger/Inbox/
+idempotência, antes da conclusão idempotente. Replay retorna sem construir eventos.
+Falha em qualquer INSERT ou etapa posterior reverte os eventos já inseridos.
 
-Falha entre publicação e marcação pode causar republicação: preservar eventId estável e envelope persistido; consumidor tolera duplicatas. A entrega é **at-least-once**, não exactly-once. Claims, leases/locks e política exata de backoff/limites ainda não escolhidos. Outbox Publisher e Pending Reference Processor são componentes distintos; o segundo resolve referências com política descrita em [Wagering](wagering.md).
+PENDING/attempts zero/published_at nulo é intenção durável. O publisher lê somente
+registros confirmados. OPENING não produz eventos Wagering. Resolução de referência
+produz novos fatos terminais; polling e claim perdido não produzem fatos. A
+[matriz de emissão](../contracts/integration-events.md#quando-emitir) é a fonte dos
+quatro eventos e dos casos sem evento.
 
-## Eventos de integração (§11)
+## Publicação recuperável
 
-| Evento mínimo                    | Quando                                                              |
-| -------------------------------- | ------------------------------------------------------------------- |
-| WagerTransactionProcessed        | Qualquer transação aplicada, inclusive LOSS                         |
-| WagerTransactionRejected         | Rejeição por regra de negócio, inclusive referência esgotada (§7.1) |
-| WalletBalanceChanged             | Somente quando saldo muda                                           |
-| WagerTransactionPendingReference | Referência ausente                                                  |
+[OutboxPublisher](../../src/platform/messaging/outbox-publisher.ts) depende de
+OutboxStore/EventPublisher técnicos. O adapter SQS do módulo valida contratos; a
+Platform não importa negócios. Aquisição SQL usa FOR UPDATE SKIP LOCKED numa
+transação curta, com novo token por claim, owner, lease e incremento de attempts.
+Commit libera locks antes da rede. Batch não supera concorrência; claims não
+aguardam vaga numa fila local. [SQL e integridade](../persistence.md#claims-e-fencing).
 
-Envelope é **classe abstrata IntegrationEvent com subclasse concreta por evento**. eventType e version pertencem ao tipo, não a strings soltas no chamador. Campos: eventId, eventType, aggregateId, correlationId, causationId opcional, occurredAt, version e data readonly. Serialização da data de ocorrência em ISO-8601; envelope JSON estável/versionável vai no payload da Outbox. Valores monetários em data usam MoneyProps (strings decimais), nunca instância Money.
+O publisher envia o envelope histórico, sem recalcular estado. Confirmação SQS com
+MessageId/SequenceNumber antecede UPDATE PUBLISHED e limpeza do claim. Conclusão ou
+retry exige token, PENDING e lease válido no relógio SQL. Atualização zero distingue
+ALREADY_PUBLISHED, CLAIM_LOST, LEASE_EXPIRED e MISSING. O dono antigo não confirma
+ou libera o claim de outro processo. Leases não são renovados indefinidamente.
 
-O exemplo WalletBalanceChanged usa version 1 e data com walletId, transactionId, direction, money, balanceBefore, balanceAfter e walletVersion; não define automaticamente todos os contratos de data dos outros eventos. Destinos/filas de eventos e seus ajustes ainda estão pendentes.
+Falha de envio agenda backoff exponencial com jitter entre mínimo e teto; erro
+permanente aguarda o teto. Attempts conta claims confirmados, inclusive crash antes
+de enviar. Tentativas não são esgotadas nem descartadas. Falha ao persistir retry/
+finalização deixa o lease recuperável. Códigos permitidos e ações de reparação
+ficam no [runbook do publisher](../operations/publisher.md).
 
-## Falhas, ACK, redelivery e DLQ (§§3, 10–11)
+Se SQS aceitar e o processo morrer antes de PUBLISHED, outro processo pode enviar
+o mesmo evento. Fencing protege SQL, sem desfazer um envio já aceito. EventId e
+envelope permanecem estáveis; consumidor posterior precisa deduplicar por eventId.
+Não há consumer downstream implementado ou promessa de exactly-once delivery.
+FIFO ordena chegada por grupo, sem ordenar commits financeiros ou eventos irmãos
+entre publishers concorrentes. A janela FIFO de cinco minutos não é garantia
+permanente de deduplicação.
 
-| Situação                                                   | Garantia explícita / recuperação                                                                              |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Erro de negócio                                            | Resultado terminal persistido; ACK após commit, sem efeito financeiro da rejeição                             |
-| Erro transitório PostgreSQL/SQS                            | Retry com backoff; sem ACK antes de confirmar persistência                                                    |
-| Erro permanente                                            | Encaminhamento DLQ; respeitar limite de tentativas antes da DLQ; detalhes de classificação/registro pendentes |
-| Crash antes do commit                                      | Nenhum efeito parcial confirmado; redelivery permite nova tentativa                                           |
-| Crash depois do commit e antes do ACK                      | Redelivery consulta Inbox/idempotência e não duplica efeitos                                                  |
-| Crash depois do commit e antes de publicar                 | Outra instância recupera Outbox e publica                                                                     |
-| Publicação confirmada externamente, marcação local incerta | Republicação possível com mesmo eventId; duplicata segura                                                     |
-| SIGTERM                                                    | Concluir mensagens em andamento ou devolver visibilidade; não confirmar trabalho incompleto                   |
+## Verificação e limites
 
-Recebimentos repetidos não justificam crédito/débito/evento financeiro novos. Falhas e recuperação da DLQ devem ser diagnosticáveis; estratégia de redrive, configurações de visibilidade/tentativas e filas de eventos precisam de decisão. A expiração da deduplicação FIFO não substitui o banco.
+[Inbox real](../../test/inbox.test.ts), [consumers SQS](../../test/sqs-consumer.test.ts),
+[publishers concorrentes](../../test/publisher-pipeline.test.ts) e
+[recuperação](../../test/publisher-recovery.test.ts) exercitam os pontos de commit,
+ACK e aceite incerto em containers/processos reais. Os
+[cenários distribuídos](../testing/distributed-scenarios.md) indicam barreiras e
+assertivas; contagens/datas pertencem ao relatório da execução.
 
-## Evidências futuras (§§12–13)
-
-Validar com PostgreSQL e LocalStack/MiniStack reais em containers: atomicidade incluindo Inbox/Outbox, redelivery, retry/DLQ, dois publishers concorrentes e reinício/crash nas janelas descritas. Pelo menos três processos quando a garantia avaliada depender disso. Métricas/correlação mínimas estão em [requirements.md](../requirements.md); não registrar payload financeiro completo ou segredos para diagnosticar.
+Retenção do broker é limitada. O ambiente LocalStack não tem volume persistente;
+recriá-lo perde mensagens, inclusive as já PUBLISHED, sem republicação automática.
+Nenhuma garantia de durabilidade cobre remoção administrativa dos dados ou perda
+do armazenamento PostgreSQL. [Recuperação operacional](../operations/failure-recovery.md).

@@ -29,6 +29,13 @@
 		"checkJs": false,
 		"noEmit": true
 	},
-	"include": ["src/**/*.ts", "test/**/*.ts", "build.ts", "*.mjs", "*.cjs"],
+	"include": [
+		"src/**/*.ts",
+		"test/**/*.ts",
+		"docker/**/*.ts",
+		"build.ts",
+		"*.mjs",
+		"*.cjs"
+	],
 	"exclude": ["node_modules", "dist", ".architecture-fixtures"]
 }

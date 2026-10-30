@@ -1,98 +1,100 @@
 # Distributed Wagering Processor
 
-API NestJS para um monólito modular hexagonal, com fundação PostgreSQL/MikroORM. Única rota: `GET /health/live`, com HTTP 200 e `{"status":"ok"}`. Liveness verifica apenas o processo HTTP.
+Serviço financeiro para o [backend challenge da Jungle Gaming](https://github.com/junglegaming/backend-challenge).
+Recebe apostas por HTTP e SQS, registra cada movimento em um ledger e publica
+os eventos confirmados. PostgreSQL coordena o saldo e a idempotência entre
+instâncias, inclusive quando mensagens chegam duplicadas ou fora de ordem.
 
-Requer Bun **1.4.4** no PATH e Docker com Compose para PostgreSQL local e testes de integração. Node, npm, pnpm, Yarn e Nest CLI não são necessários para os comandos do projeto. Dependências diretas têm versões exatas e `bun.lock` deve ser versionado.
+## Execute com Docker
+
+Requer Git e Docker Engine/Desktop com Compose v2 e containers Linux.
+Não precisa instalar Bun, Node.js, PostgreSQL ou AWS CLI no host.
+
+```sh
+git clone https://github.com/self1027/tt-junglegaming-backend.git
+cd tt-junglegaming-backend
+docker compose -f compose.demo.yaml up -d --build --wait
+```
+
+O comando compila a imagem, sobe PostgreSQL/LocalStack, aplica migrations e
+provisiona as filas antes de iniciar API, consumer, publisher e worker de
+referências. Aguarda os healthchecks; a API fica em `http://127.0.0.1:3000`.
+As credenciais são exemplos locais, sem `.env` obrigatório.
+
+## Teste a solução
+
+```sh
+docker compose -f compose.demo.yaml run --rm smoke
+```
+
+O smoke cria uma wallet com `100.00 BRL` e envia duas BETs de `80.00` em paralelo:
+uma processa, a outra é rejeitada e o saldo fica em `20.00`, com um único débito.
+Depois confere replay e conflito de payload, entrega duplicada por SQS, eventos
+da Outbox e resolução de REFUND enviado antes da BET.
+
+```text
+PASS  Concurrent bets: 100/80/80; PROCESSED …, REJECTED …
+PASS  Ledger and reconciliation: 20.00 BRL, one debit
+PASS  Idempotent replay and divergent payload conflict
+PASS  SQS processing: …
+PASS  Pending reference resolution: …
+PASS  Transactional Outbox: 10 matching eventIds received; …
+
+ALL CHECKS PASSED
+```
+
+Cada execução usa identidades novas e consulta respostas, ledger, Inbox/Outbox e
+eventos reais. Pode repetir sem apagar o banco. O [quickstart](docs/quickstart.md)
+traz health, logs e solução de problemas.
+
+## O que foi implementado
+
+- Dinheiro exato em centavos (`bigint`), com strings decimais nos contratos.
+- Lock pessimista por wallet e constraints SQL para concorrência entre instâncias.
+- Idempotência persistente, conflito de payload e replay do saldo histórico.
+- Ledger imutável e reconciliação por snapshot, sem correção silenciosa.
+- Inbox no mesmo commit financeiro; ACK depois do commit. Outbox transacional.
+- Recuperação por redelivery e claims com lease/token e fencing.
+- Reversões integrais e worker para referências fora de ordem, conforme a
+  [política RE-03](docs/domain/wagering.md#políticas-e-reversões).
+
+## Testes e CI
+
+O [GitHub Actions](https://github.com/self1027/tt-junglegaming-backend/actions/workflows/ci.yml)
+separa checks estáticos, suíte completa com PostgreSQL/LocalStack reais e smoke
+Docker. Consulte a execução do commit para conferir o resultado.
+
+Com Bun **1.4.4** e Docker instalados:
 
 ```sh
 bun install --frozen-lockfile
-# Copie .env.example para .env (PowerShell: Copy-Item .env.example .env).
-docker compose --project-name dwp up -d --wait
-bun run db:migrate
-bun run dev
+bun run test
 ```
 
-`PORT` é opcional (padrão `3000`, inteiro entre 1 e 65535). Bun e Compose carregam `.env` local; use [.env.example](.env.example) como referência e credenciais apenas de desenvolvimento. O servidor escuta em `0.0.0.0` e abre conexão PostgreSQL no startup. Nenhuma migration é executada automaticamente.
+A suíte cria ambientes descartáveis próprios; inclui processos concorrentes,
+falhas, recuperação e exemplos executáveis Bash/curl. A primeira execução baixa
+imagens e pode levar vários minutos. Veja a [estratégia de testes](docs/testing/strategy.md).
 
-`POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER` e `POSTGRES_PASSWORD` são obrigatórias na aplicação/CLI; `POSTGRES_POOL_MAX` é opcional (10). Compose publica a porta configurada somente em 127.0.0.1, com volume persistente e healthcheck. Não reutilize o banco da aplicação para testes: a suíte cria projetos Compose e volumes descartáveis próprios, em portas dinâmicas.
+## Arquitetura e limitações
 
-| Comando                | Função                                                    |
-| ---------------------- | --------------------------------------------------------- |
-| `bun run dev`          | Bun com watch sobre o TypeScript                          |
-| `bun run build`        | Limpa dist e executa tsc com Bun                          |
-| `bun run start`        | Bun executando dist/main.api.js                           |
-| `bun run typecheck`    | TypeScript sem emissão, incluindo testes e build.ts       |
-| `bun run lint`         | ESLint sem warnings e análise arquitetural                |
-| `bun run lint:fix`     | Correções do ESLint e análise arquitetural                |
-| `bun run architecture` | Grafo de dependências da aplicação                        |
-| `bun run format:check` | Verificação do Prettier                                   |
-| `bun run format`       | Formatação do Prettier                                    |
-| `bun run test`         | Bun Test, PostgreSQL real, HTTP e testes negativos        |
-| `bun run db:migrate`   | Aplica migrations versionadas                             |
-| `bun run db:rollback`  | Reverte a última migration; recusa ledger com lançamentos |
-| `bun run db:status`    | Lista migrations executadas e pendentes                   |
+Monólito modular hexagonal com quatro processos independentes. Financial mantém
+saldo/ledger; Wagering coordena operações; adapters implementam HTTP, SQL e SQS.
+Bun, TypeScript strict, NestJS e MikroORM compõem a aplicação.
 
-Produção local: `bun run build` seguido de `bun run start`.
+Eventos têm entrega at-least-once: consumidores precisam deduplicar por `eventId`.
+Autenticação foi omitida conforme o desafio, com ponto de extensão para IdP.
+Métricas são JSON, sem backend agregado. A demo mantém PostgreSQL em volume;
+recriar LocalStack perde suas mensagens e não republica eventos já marcados como
+PUBLISHED. É um ambiente local, sem backup/failover ou validação de IAM na AWS.
 
-Schema físico, decisões de precisão/referências/OPENING, integridade e reversibilidade estão em [docs/persistence.md](docs/persistence.md). Testes de persistência isolados: `bun test test/persistence.test.ts`. Eles executam CLI up/status/down/up, constraints, commit/rollback, identity maps e locks por wallet entre processos Bun independentes; requerem PostgreSQL real em container e não são substituídos por mocks. A primeira execução pode baixar a imagem PostgreSQL.
+[Arquitetura e decisões](ARCHITECTURE.md) · [Requisitos e evidências](docs/requirements.md) ·
+[Contratos e guias técnicos](docs/index.md) · [Desenvolvimento local](docs/operations/local-development.md)
 
-`docker compose --project-name dwp down` encerra o banco preservando o volume. Trocar credenciais em `.env` não altera um volume PostgreSQL já inicializado; alinhe as credenciais do banco existente. `db:rollback` é destinado ao banco descartável sem histórico, não à exclusão de lançamentos confirmados.
-
-Para navegar pelo código, consulte o grafo Graphify antes de explorar arquivos: `bun run graph:query "createApi ApiModule"`. Gere o primeiro índice com `bun run graph:build` e atualize após mudanças de código com `bun run graph:update`. Instalação da ferramenta externa, demais consultas e limites de cobertura estão em [docs/tooling/graphify.md](docs/tooling/graphify.md). O guia do agente está em [AGENTS.md](AGENTS.md).
+## Parar a demonstração
 
 ```sh
-docker build -t distributed-wagering-processor .
-docker run --rm --name dwp-api --network dwp_default -p 3000:3000 --env-file .env -e POSTGRES_HOST=postgres -e POSTGRES_PORT=5432 distributed-wagering-processor
-curl http://localhost:3000/health/live
+docker compose -f compose.demo.yaml down
 ```
 
-Imagem Bun fixada por versão e digest, estágios separados para build/dependências de produção, instalação com `--frozen-lockfile`, execução como usuário `bun`. O exemplo usa PostgreSQL iniciado no projeto Compose `dwp`; aplique migrations pelo checkout com dependências completas antes de iniciar a API. CLI não pertence à imagem de produção. Ao atualizar Bun, atualizar packageManager, engines e imagem/digest juntos.
-
-```text
-src/
-  main.api.ts
-  bootstrap/                    # módulo Nest e fábrica HTTP
-  modules/
-    financial/{public,domain,application,adapters}/
-    wagering/{public,domain,application,adapters}/
-  platform/
-    messaging/
-    persistence/
-    observability/              # controller de liveness
-test/                           # integração e fronteiras
-```
-
-Pastas vazias são preservadas por `.gitkeep`. Persistência técnica das seis tabelas, núcleo financeiro (Money, Wallet e WalletLedgerEntry), portas, mappers, adapters e UnitOfWork estão implementados. APIs, invariantes e factory de abertura versão 1 estão em [Financial](docs/domain/financial.md); contrato transacional/locks em [persistência](docs/persistence.md#integração-financeira-e-unitofwork). Casos de uso, endpoints financeiros, apostas, processamento de mensagens e workers continuam futuros.
-
-Integração dos adapters: `bun test test/financial-persistence.test.ts`. Usa outro PostgreSQL descartável e testa precisão, ledger, commit/rollback, contextos/pool e locks com três processos Bun independentes. Não substitui os cenários futuros de idempotência, SQS ou recuperação de workers.
-
-Unidade financeira sem PostgreSQL/Nest/Docker: `bun test test/money.test.ts test/wallet.test.ts test/wallet-ledger-entry.test.ts`.
-
-`tsconfig.json` habilita todas as verificações strict solicitadas, incluindo índices possivelmente ausentes, propriedades opcionais exatas, overrides explícitos e verificações de código não usado. Decorators legados e `emitDecoratorMetadata` preservam a integração Nest. O build usa tsc, executado por Bun, para emitir os metadados sem depender de um bundler; Bun executa tanto os fontes em desenvolvimento quanto o JavaScript compilado. Testes e build.ts pertencem ao mesmo projeto tipado; arquivos JS de configuração são incluídos para resolução, mas recebem somente regras ESLint sem análise de tipos.
-
-ESLint Flat Config combina `@eslint/js` recommended com `strictTypeChecked`, `stylisticTypeChecked` e `projectService: true` para TypeScript. Os presets já cobrem `no-explicit-any`, regras `no-unsafe-*`, promises e `await-thenable`. Regras adicionais exigem retornos explícitos, imports de tipos, condições booleanas estritas e switches exaustivos. Apenas módulos decorados em `bootstrap/**/*.module.ts` recebem `allowWithDecorator` em `no-extraneous-class`: classes vazias decoradas são a configuração declarativa exigida pelo Nest, sem relaxar a regra no restante do código.
-
-`@ts-ignore` e `@ts-nocheck` são proibidos. `@ts-expect-error` exige descrição de pelo menos dez caracteres e o próprio TypeScript rejeita diretivas que não correspondem a um erro. A revisão deve verificar a justificativa. Supressões inline de ESLint são inteiramente proibidas (`noInlineConfig`); uma exceção futura deve ser explícita, localizada e justificada na configuração versionada. Não há desativações globais para contornar falhas.
-
-Prettier é o único responsável pela formatação: tabs com largura visual 4, aspas simples, ponto e vírgula, arrow functions sem parênteses quando possível e trailing commas em todos os lugares suportados. `eslint-config-prettier` é aplicado por último.
-
-As fronteiras locais usam ESLint: domain/application/public não importam pacotes externos; `@Module` fica em bootstrap; controllers rejeitam decisões, loops, atribuições e cálculos. Essa política inicial mantém as camadas internas independentes de frameworks e implementações externas.
-
-O dependency-cruiser complementa o ESLint com resolução de caminhos e análise global do grafo, necessária para ciclos e dependências transitivas através de arquivos intermediários. É executado dentro de `lint`, também para imports de tipos, imports dinâmicos literais e reexports:
-
-- domain depende apenas de domain/public;
-- application depende apenas de application/domain/public;
-- public expõe contratos e pode depender somente de public/domain;
-- financial nunca depende de wagering, nem de seu public;
-- outros módulos só acessam financial/wagering por public;
-- módulos e platform não importam bootstrap; platform não depende dos módulos;
-- ciclos, imports não resolvidos e dependências de desenvolvimento em produção falham;
-- implementações são compostas em bootstrap.
-
-`test/architecture.test.ts` constrói pequenos grafos isolados e exige código de saída 1 **e o nome da regra esperada** para cada violação. Inclui controles positivos para application → domain e wagering → financial/public. Os fixtures são excluídos de lint/typecheck e removidos após os testes. Os testes ESLint usam a configuração real para rejeitar lógica em controller e composição fora de bootstrap.
-
-Bun Test foi escolhido sem Jest ou adaptadores adicionais: a compatibilidade é verificada por inicialização real de `@nestjs/testing` e requisições HTTP via fetch em porta efêmera, com fechamento da aplicação após os testes. Nenhuma integração de mocking do Jest é presumida.
-
-Limites: verificações estáticas não provam ausência semântica de regra de negócio em um método. Controllers e contratos públicos ainda precisam de revisão humana. Imports dinâmicos calculados são proibidos pelo ESLint para manter o grafo verificável; o decorator Module deve manter seu nome, e tanto `@Module` quanto `@Nest.Module` são verificados. Ao criar novos módulos, ampliar a lista de módulos em `.dependency-cruiser.cjs` e os testes correspondentes. Próximos passos de domínio e infraestrutura dependem de definições futuras; não fazem parte deste bootstrap.
-
-Referências técnicas: [TypeScript decorators](https://www.typescriptlang.org/docs/handbook/decorators), [typescript-eslint Project Service](https://typescript-eslint.io/blog/project-service/) e [dependency-cruiser rules](https://github.com/sverweij/dependency-cruiser/blob/main/doc/rules-reference.md).
+O volume PostgreSQL e seu histórico são preservados. `down --volumes` apaga os
+dados da demo; use somente se quiser descartá-los.

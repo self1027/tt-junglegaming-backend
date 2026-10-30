@@ -119,6 +119,87 @@ export default tseslint.config(
 		},
 	},
 	{
+		files: [
+			'src/platform/messaging/reliable-consumer.ts',
+			'src/modules/wagering/adapters/sqs/**/*.ts',
+			'src/main.consumer.ts',
+			'src/bootstrap/run-consumer.ts',
+			'src/platform/messaging/outbox-publisher.ts',
+			'src/main.publisher.ts',
+			'src/bootstrap/run-publisher.ts',
+			'src/modules/wagering/adapters/worker/**/*.ts',
+			'src/main.pending-worker.ts',
+			'src/bootstrap/run-pending-worker.ts',
+		],
+		rules: {
+			'no-restricted-syntax': [
+				'error',
+				...importGuards,
+				compositionGuard,
+				{
+					selector:
+						'CallExpression[callee.property.name=/^(debit|credit)$/]',
+					message:
+						'Financial effects belong in the shared ProcessWagerUseCase.',
+				},
+			],
+		},
+	},
+	{
+		files: [
+			'src/modules/wagering/adapters/persistence/mikro-orm-inbox.repository.ts',
+		],
+		rules: {
+			'no-restricted-syntax': [
+				'error',
+				...importGuards,
+				compositionGuard,
+				{
+					selector:
+						'CallExpression[callee.property.name=/^(commit|transactional|begin|rollback|flush)$/]',
+					message:
+						'Inbox must use the supplied TransactionSession without its own commit.',
+				},
+			],
+		},
+	},
+	{
+		files: [
+			'src/modules/wagering/application/resolve-pending-wager.use-case.ts',
+		],
+		rules: {
+			'no-restricted-syntax': [
+				'error',
+				...importGuards,
+				compositionGuard,
+				{
+					selector:
+						'CallExpression[callee.object.property.name="transactions"][callee.property.name=/^(insert|insertProcessed)$/], CallExpression[callee.object.name="WagerTransaction"][callee.property.name="create"]',
+					message:
+						'Pending resolution must update the existing WagerTransaction.',
+				},
+			],
+		},
+	},
+	{
+		files: [
+			'src/modules/wagering/adapters/persistence/mikro-orm-pending.repository.ts',
+		],
+		rules: {
+			'no-restricted-syntax': [
+				'error',
+				...importGuards,
+				compositionGuard,
+				{
+					selector:
+						'ClassDeclaration[id.name="MikroOrmPendingResolutionRepository"] CallExpression[callee.property.name=/^(commit|transactional|begin|rollback|flush)$/]',
+					message:
+						'Pending resolution must use the supplied TransactionSession.',
+				},
+			],
+		},
+	},
+	{
 		files: ['src/**/*.controller.ts'],
 		rules: {
 			'no-restricted-syntax': [

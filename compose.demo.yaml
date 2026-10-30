@@ -1,0 +1,140 @@
+name: dwp-demo
+
+# Disposable local credentials; never use this configuration in production.
+x-database: &database
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: '5432'
+    POSTGRES_DB: wagering_demo
+    POSTGRES_USER: wagering_demo
+    POSTGRES_PASSWORD: local-demo-only
+    POSTGRES_POOL_MAX: '5'
+
+x-sqs: &sqs
+    AWS_REGION: us-east-1
+    AWS_ACCESS_KEY_ID: test
+    AWS_SECRET_ACCESS_KEY: test
+    SQS_ENDPOINT: http://localstack:4566
+    SQS_QUEUE_URL: http://localstack:4566/000000000000/wager-transactions.fifo
+    SQS_DLQ_URL: http://localstack:4566/000000000000/wager-transactions-dlq.fifo
+    SQS_EVENTS_QUEUE_URL: http://localstack:4566/000000000000/wager-events.fifo
+
+x-app: &app
+    image: dwp-demo-app:local
+    init: true
+    stop_grace_period: 40s
+    environment: &environment
+        <<: [*database, *sqs]
+    depends_on: &initialized
+        postgres:
+            condition: service_healthy
+        localstack:
+            condition: service_healthy
+        migrate:
+            condition: service_completed_successfully
+        provision-sqs:
+            condition: service_completed_successfully
+
+x-worker-health: &worker-health
+    test: [CMD, bun, docker/worker-health.ts]
+    interval: 2s
+    timeout: 3s
+    retries: 30
+    start_period: 5s
+
+services:
+    postgres:
+        image: postgres:18.3-bookworm@sha256:80630f83606d8db77d30b3851b16a9f78be2d0d4dda6f7b82a1fdca5ebe3acba
+        environment:
+            <<: *database
+        volumes:
+            - demo_postgres_data:/var/lib/postgresql
+        healthcheck:
+            test:
+                [
+                    CMD-SHELL,
+                    'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"',
+                ]
+            interval: 2s
+            timeout: 3s
+            retries: 30
+            start_period: 5s
+    localstack:
+        image: localstack/localstack:4.14.0@sha256:3ebc37595918b8accb852f8048fef2aff047d465167edd655528065b07bc364a
+        environment:
+            SERVICES: sqs
+            AWS_DEFAULT_REGION: us-east-1
+            SQS_ENDPOINT_STRATEGY: dynamic
+        healthcheck:
+            test: [CMD, awslocal, sqs, list-queues]
+            interval: 2s
+            timeout: 5s
+            retries: 30
+            start_period: 5s
+    migrate:
+        build:
+            context: .
+            target: migrations
+        environment: *database
+        depends_on:
+            postgres:
+                condition: service_healthy
+        restart: 'no'
+    provision-sqs:
+        <<: *app
+        command: [bun, dist/platform/messaging/provision-sqs.js]
+        environment: *sqs
+        depends_on:
+            localstack:
+                condition: service_healthy
+        restart: 'no'
+    api:
+        <<: *app
+        build:
+            context: .
+            target: runtime
+        command: [bun, --preload, ./docker/json-logger.ts, dist/main.api.js]
+        ports:
+            - '127.0.0.1:${DEMO_PORT:-3000}:3000'
+        healthcheck:
+            test:
+                - CMD
+                - bun
+                - -e
+                - 'const r = await fetch("http://127.0.0.1:3000/health/ready", {signal: AbortSignal.timeout(2000)}); process.exit(r.ok ? 0 : 1)'
+            interval: 2s
+            timeout: 3s
+            retries: 30
+            start_period: 5s
+    consumer:
+        <<: *app
+        command: [bun, docker/worker.ts, consumer]
+        environment:
+            <<: *environment
+            # LocalStack can retain an abandoned long poll after a process restart.
+            SQS_WAIT_SECONDS: '1'
+        healthcheck: *worker-health
+    publisher:
+        <<: *app
+        command: [bun, docker/worker.ts, publisher]
+        healthcheck: *worker-health
+    pending-worker:
+        <<: *app
+        command: [bun, docker/worker.ts, pending-worker]
+        depends_on:
+            postgres:
+                condition: service_healthy
+            migrate:
+                condition: service_completed_successfully
+        healthcheck: *worker-health
+    smoke:
+        <<: *app
+        profiles: [tools]
+        command: [bun, docker/smoke.ts]
+        environment:
+            <<: *environment
+            API_BASE_URL: http://api:3000
+        # Attach to the stack started by up; run must never recreate its processes.
+        depends_on: {}
+
+volumes:
+    demo_postgres_data:

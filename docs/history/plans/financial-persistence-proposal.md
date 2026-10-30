@@ -1,3 +1,5 @@
+> HISTORICAL: registro da etapa indicada. Estado atual em [docs/index](../../index.md).
+
 # Proposta de abertura para a integração financeira
 
 Registrada antes da implementação, conforme §10 da tarefa Financial Persistence Integration.
@@ -14,5 +16,5 @@ transação ou ledger. A factory sozinha não promete persistência nem atomicid
 
 Esta evolução está autorizada condicionalmente pelo §10 da tarefa atual, que exige
 documentar a proposta antes de implementá-la. Não inclui endpoint ou caso de uso.
-O contrato definitivo e as evidências ficarão em [Financial](domain/financial.md)
-e [persistência](persistence.md), preservando o [enunciado](challenge.md).
+O contrato definitivo e as evidências ficarão em [Financial](../../domain/financial.md)
+e [persistência](../../persistence.md), preservando o [enunciado](../../challenge.md).
