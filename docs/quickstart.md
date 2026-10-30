@@ -60,6 +60,8 @@ reais e confirma que o processo ainda existe. Não mede backlog, progresso cont�
 ou disponibilidade posterior das dependências. O smoke verifica trabalho real
 dos três workers. O wrapper Docker encaminha SIGTERM ao processo compilado;
 Compose concede 40 segundos para o shutdown configurado de 30 segundos.
+Na demo, o consumer usa long polling de 1 segundo para limitar requests antigos
+que o LocalStack mantém após reinícios; a configuração geral continua em 20 segundos.
 
 ## Suíte completa
 

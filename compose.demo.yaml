@@ -20,9 +20,6 @@ x-sqs: &sqs
 
 x-app: &app
     image: dwp-demo-app:local
-    build:
-        context: .
-        target: runtime
     init: true
     stop_grace_period: 40s
     environment: &environment
@@ -92,6 +89,9 @@ services:
         restart: 'no'
     api:
         <<: *app
+        build:
+            context: .
+            target: runtime
         command: [bun, --preload, ./docker/json-logger.ts, dist/main.api.js]
         ports:
             - '127.0.0.1:${DEMO_PORT:-3000}:3000'
@@ -108,6 +108,10 @@ services:
     consumer:
         <<: *app
         command: [bun, docker/worker.ts, consumer]
+        environment:
+            <<: *environment
+            # LocalStack can retain an abandoned long poll after a process restart.
+            SQS_WAIT_SECONDS: '1'
         healthcheck: *worker-health
     publisher:
         <<: *app

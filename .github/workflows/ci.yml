@@ -72,8 +72,11 @@ jobs:
               run: docker compose -f compose.demo.yaml up -d --build --wait --wait-timeout 180
             - name: Smoke twice with unique identities
               run: |
+                  docker compose -f compose.demo.yaml ps -q api consumer publisher pending-worker | sort > demo-containers-before.txt
                   docker compose -f compose.demo.yaml run --rm smoke
                   docker compose -f compose.demo.yaml run --rm smoke
+                  docker compose -f compose.demo.yaml ps -q api consumer publisher pending-worker | sort > demo-containers-after.txt
+                  diff -u demo-containers-before.txt demo-containers-after.txt
             - name: Repeated startup and graceful restart
               run: |
                   docker compose -f compose.demo.yaml up -d --wait --wait-timeout 180
@@ -101,4 +104,6 @@ jobs:
                   path: |
                       demo.log
                       demo-status.log
+                      demo-containers-before.txt
+                      demo-containers-after.txt
                   retention-days: 7
