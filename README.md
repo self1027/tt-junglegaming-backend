@@ -5,6 +5,59 @@ Recebe apostas por HTTP e SQS, registra cada movimento em um ledger e publica
 os eventos confirmados. PostgreSQL coordena o saldo e a idempotência entre
 instâncias, inclusive quando mensagens chegam duplicadas ou fora de ordem.
 
+<div align="center">
+
+```mermaid
+flowchart TB
+    SQS["Comandos SQS"]
+    HTTP["Requisições HTTP"]
+
+    subgraph DOCKER["Docker Compose"]
+        COMMANDS["SQS FIFO · comandos<br/>LocalStack"]
+        CONSUMER1["Consumer 1"]
+        CONSUMER2["Consumer 2"]
+        NGINX["Nginx<br/>Round-robin"]
+        API1["API 1<br/>Bun / NestJS"]
+        API2["API 2<br/>Bun / NestJS"]
+        API3["API 3<br/>Bun / NestJS"]
+        PG[("PostgreSQL<br/>Lock por wallet<br/>Wallet · Ledger · Inbox · Outbox")]
+        PUBLISHER1["Publisher 1"]
+        PUBLISHER2["Publisher 2"]
+        REFERENCES["Worker de referências"]
+        EVENTS["SQS FIFO · eventos<br/>LocalStack"]
+
+        COMMANDS --> CONSUMER1 & CONSUMER2
+        NGINX --> API1 & API2 & API3
+        CONSUMER1 & CONSUMER2 --> PG
+        API1 & API2 & API3 --> PG
+        PG --> PUBLISHER1 & PUBLISHER2
+        PG <--> REFERENCES
+        PUBLISHER1 & PUBLISHER2 --> EVENTS
+    end
+
+    SQS --> COMMANDS
+    HTTP --> NGINX
+
+    classDef entry fill:#1e293b,stroke:#94a3b8,color:#f8fafc
+    classDef app fill:#302710,stroke:#d6a94c,color:#fef3c7
+    classDef queue fill:#17263b,stroke:#60a5fa,color:#dbeafe
+    classDef database fill:#0f332c,stroke:#34d399,color:#ecfdf5
+    classDef reference fill:#2e2540,stroke:#c4b5fd,color:#f3e8ff
+    class HTTP,SQS entry
+    class NGINX,API1,API2,API3,CONSUMER1,CONSUMER2,PUBLISHER1,PUBLISHER2 app
+    class COMMANDS,EVENTS queue
+    class PG database
+    class REFERENCES reference
+    style DOCKER fill:transparent,stroke:#64748b,color:#94a3b8
+    linkStyle default stroke:#94a3b8,stroke-width:1.5px
+```
+
+</div>
+
+APIs e consumers executam o mesmo `ProcessWagerUseCase`. O PostgreSQL coordena
+saldo e idempotência por wallet. Os publishers enviam os eventos da Outbox para
+SQS; o worker de referências resolve as operações pendentes no banco.
+
 ## Execute com Docker
 
 Requer Git e Docker Engine/Desktop com Compose v2 e containers Linux.
@@ -16,11 +69,11 @@ cd tt-junglegaming-backend
 docker compose -f compose.demo.yaml up -d --build --wait
 ```
 
-O comando compila a imagem, sobe PostgreSQL/LocalStack, aplica migrations e
-provisiona as filas antes de iniciar três APIs, dois consumers, dois publishers
-da Outbox e um worker de referências. Nginx aguarda as três APIs saudáveis e é o
-único serviço publicado, em `http://127.0.0.1:3000`.
-As credenciais são exemplos locais, sem `.env` obrigatório.
+O Compose compila a imagem, sobe PostgreSQL e LocalStack e executa os jobs de
+migrations e provisionamento das filas. Depois inicia as APIs e os workers.
+Nginx espera as três APIs ficarem saudáveis e atende em `http://127.0.0.1:3000`.
+É o único serviço com porta publicada no host. As credenciais são locais e o
+setup dispensa `.env`.
 
 ## Teste a solução
 
@@ -28,11 +81,13 @@ As credenciais são exemplos locais, sem `.env` obrigatório.
 docker compose -f compose.demo.yaml run --rm smoke
 ```
 
-O smoke cria uma wallet com `100.00 BRL` e envia duas BETs de `80.00` em paralelo:
-os headers do Nginx comprovam backends distintos. Uma processa, a outra é
-rejeitada e o saldo fica em `20.00`, com um único débito. Depois confere 50 replays
-concorrentes pelas três APIs, resultado histórico e conflito de payload, entrega duplicada por SQS, eventos
-da Outbox e resolução de REFUND enviado antes da BET.
+O smoke cria uma wallet com `100.00 BRL` e envia duas BETs de `80.00` em paralelo.
+Os headers do Nginx confirmam que cada BET chegou a uma API diferente. Uma é
+processada e a outra é rejeitada: o saldo fica em `20.00`, com um único débito.
+
+Depois, 50 replays concorrentes passam pelas três APIs e retornam o resultado
+histórico. O smoke também verifica conflito de payload, entrega duplicada por
+SQS, eventos da Outbox e resolução de REFUND enviado antes da BET.
 
 ```text
 PASS  Readiness through Nginx: …
@@ -81,13 +136,12 @@ imagens e pode levar vários minutos. Veja a [estratégia de testes](docs/testin
 
 ## Arquitetura e limitações
 
-Monólito modular hexagonal com quatro tipos de processo independentes. Financial mantém
-saldo/ledger; Wagering coordena operações; adapters implementam HTTP, SQL e SQS.
-Bun, TypeScript strict, NestJS e MikroORM compõem a aplicação.
+O monólito modular hexagonal tem quatro tipos de processo independentes.
+Financial mantém saldo e ledger; Wagering coordena as operações; os adapters
+implementam HTTP, SQL e SQS. A aplicação usa Bun, TypeScript strict, NestJS e MikroORM.
 
-Nginx faz round-robin HTTP; PostgreSQL coordena saldo, idempotência e claims entre
-instâncias. Os dois publishers publicam na fila de eventos; o worker de referências
-é separado. A topologia é fixa, sem TLS, Kubernetes, replicação do banco ou autoscaling.
+A topologia da demo é fixa. TLS, Kubernetes, replicação do banco e autoscaling
+ficam fora do escopo.
 
 Eventos têm entrega at-least-once: consumidores precisam deduplicar por `eventId`.
 Autenticação foi omitida conforme o desafio, com ponto de extensão para IdP.

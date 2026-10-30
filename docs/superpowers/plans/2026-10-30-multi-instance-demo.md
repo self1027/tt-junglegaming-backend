@@ -2,16 +2,16 @@
 
 > Execute inline with `executing-plans`; use `verification-before-completion` before delivery.
 
-**Goal:** Demonstrate three HTTP APIs through Nginx, two consumers, two publishers
-and one reference worker with the existing two Docker commands.
+The demo runs three HTTP APIs through Nginx, two consumers, two publishers and
+one reference worker. The existing two Docker commands stay the same.
 
-**Architecture:** Nginx balances HTTP; PostgreSQL continues coordinating financial
-effects. Runtime processes share a compiled image and retain independent health,
-pools and shutdown. No domain, migration, RE-03 or message contract changes.
+Nginx balances HTTP requests. PostgreSQL coordinates financial effects. Runtime
+processes share a compiled image, each with its own healthcheck, pool and shutdown.
+Domain rules, migrations, RE-03 and message contracts remain unchanged.
 
-**Tech Stack:** Existing Bun/NestJS/PostgreSQL/LocalStack, Nginx unprivileged 1.30.6.
-
-**Spec:** User request of 2026-10-30; challenge §§8, 12 and 13.
+The stack uses the existing Bun/NestJS/PostgreSQL/LocalStack setup and adds
+Nginx unprivileged 1.30.6. Requirements come from the user request of 2026-10-30
+and challenge §§8, 12 and 13.
 
 ## Global constraints
 
@@ -20,7 +20,7 @@ pools and shutdown. No domain, migration, RE-03 or message contract changes.
 - Only Nginx publishes 127.0.0.1:${DEMO_PORT:-3000}; smoke has no dependencies.
 - Shared round-robin upstream with Docker DNS; connect timeout 1s, at most 3 tries.
 - No cache or non_idempotent retry; proxy owns X-Demo-Upstream; JSON access logs.
-- SQL smoke connection remains read-only; identities and deadlines remain isolated.
+- Smoke SQL queries are read-only. Each run uses unique identities and explicit deadlines.
 
 ## Review focus
 
@@ -41,8 +41,8 @@ pools and shutdown. No domain, migration, RE-03 or message contract changes.
 - [x] Update README, quickstart and architecture; verify docs and graph update.
 - [x] Run format:check, typecheck, lint, build and full suite. Review changes,
       commit/push feature branch and open new PR. Never merge.
-- Remote CI results are tracked in PR #2; the execution record below describes
-  observations at commit time.
+
+Remote CI results are tracked in PR #2.
 
 ## Execution record
 
@@ -59,8 +59,10 @@ pools and shutdown. No domain, migration, RE-03 or message contract changes.
 - Stopped api-3: twelve readiness requests reached the other two backends.
   Forced recreation changed 172.22.0.11 to 172.22.0.13 with the same Nginx
   container; readiness and a complete smoke reached all three again.
-- Nginx stopped: smoke failed. All APIs stopped: readiness 503, proxy liveness 200. Recovery and complete smoke passed. Final rebuilt image passed two further
-  smokes with unchanged runtime container IDs and nginx -t.
+- With Nginx stopped, the smoke failed. With all APIs stopped, readiness returned
+  503 and proxy liveness returned 200. Recovery and a complete smoke passed.
+  The final rebuilt image passed two further smokes with unchanged runtime
+  container IDs and nginx -t.
 - Each full smoke verified distinct BET backends, 50 concurrent historical
   replays across three APIs, read-only SQL, Inbox duplicate, ten published events
   matching Outbox payloads and final ledger reconciliation at 25.00 BRL.
@@ -68,7 +70,12 @@ pools and shutdown. No domain, migration, RE-03 or message contract changes.
   shell steps passed bash -n. Access logs parsed as JSON with routing/timing only.
 - format:check, typecheck, lint (including architecture), build and four
   documentation tests passed. Full suite: 487 pass, 0 fail, 38 files (469.86s).
-- PR #2 opened as draft while CI runs. First remote quality/startup/two smokes/
-  restart passed. The recreation harness failed because the runner Docker rejects
-  static IP assignment on automatic subnets. Use dynamic endpoint allocation
-  instead, retaining the assertion that the recreated API has a different IP.
+- PR #2 was opened as a draft while CI ran. Quality, startup, two smokes and
+  restart passed on the first run. The recreation harness failed because the
+  runner Docker rejected static IP assignment on automatic subnets. The harness
+  now allocates an endpoint dynamically and still requires the recreated API to
+  have a different IP.
+- The [final CI run](https://github.com/self1027/tt-junglegaming-backend/actions/runs/41071370237)
+  passed quality, docker-smoke and integration. The remote suite passed all 487
+  tests across 38 files with zero failures (511.60s). PR #2 was marked ready for
+  review without merging.

@@ -21,16 +21,17 @@ Pode repetir o comando: MikroORM aplica apenas migrations pendentes e o
 provisionamento preserva filas existentes com os mesmos atributos.
 
 `compose.demo.yaml` é independente do Compose usado para desenvolvimento/testes.
-Banco, SQS e APIs ficam na rede interna; só o Nginx é publicado em loopback. Para trocar
-a porta, defina `DEMO_PORT` no ambiente do terminal antes de subir a stack.
+Banco, SQS e APIs ficam na rede interna. Só o Nginx tem porta publicada em
+loopback. Para trocar a porta, defina `DEMO_PORT` no terminal antes de subir a stack.
 
-A topologia fixa contém Nginx → `api-1`, `api-2`, `api-3`; `consumer-1/2`,
-`publisher-1/2`, `pending-worker`, PostgreSQL e LocalStack. Os dois publishers são
-os workers da fila de eventos; o worker de referências continua separado. Todos
-os processos Bun compartilham a imagem runtime compilada por `api-1`, com pools,
-healthchecks e ciclos de vida próprios. O job de migrations usa o target da CLI.
-O balanceamento HTTP não oferece exclusão financeira: PostgreSQL coordena locks,
-idempotência, Inbox e claims de Outbox entre as instâncias.
+A topologia é fixa. Nginx distribui HTTP entre `api-1`, `api-2` e `api-3`.
+A stack também executa
+`consumer-1/2`, `publisher-1/2`, `pending-worker`, PostgreSQL e LocalStack. Os dois
+publishers enviam os eventos da Outbox; `pending-worker` resolve referências.
+Os processos Bun usam a imagem runtime compilada por `api-1`, cada um com seu
+pool, healthcheck e ciclo de vida. O job de migrations usa o target da CLI.
+Locks por wallet, idempotência, Inbox e claims de Outbox são coordenados no
+PostgreSQL compartilhado.
 
 ## Smoke
 
@@ -47,11 +48,13 @@ como evento Wagering. IDs relevantes aparecem na saída.
 Ele usa a stack já iniciada pelo comando de startup, sem subir ou recriar serviços.
 
 Todo HTTP do smoke passa pelo Nginx. O script resolve os endereços das três APIs
-e compara com `X-Demo-Upstream`: readiness deve alcançar todas e as duas BETs
-simultâneas devem chegar a backends distintos. Depois do WIN, 50 replays
-concorrentes percorrem as três APIs: todos retornam o mesmo transactionId e o
-saldo histórico `20.00`, sem novos débitos/eventos, enquanto o saldo atual é `25.00`.
-SQL é somente leitura; a criação e as operações passam pelos contratos públicos.
+e confere o header `X-Demo-Upstream`. As requisições de readiness precisam chegar
+às três APIs, e as duas BETs simultâneas precisam chegar a backends diferentes.
+Depois do WIN, o script envia 50 replays concorrentes pelas três APIs. Todos devem
+retornar o mesmo transactionId e o saldo histórico `20.00`, sem novos débitos ou
+eventos, enquanto o saldo atual é `25.00`.
+As consultas SQL são somente leitura. A criação e as operações passam pelos
+contratos públicos.
 
 Pode executar novamente. O smoke cria dados novos e não limpa tabelas. Ele
 consome e confirma somente eventos da wallet que criou; mensagens de outras
@@ -70,8 +73,8 @@ docker compose -f compose.demo.yaml logs --tail=30 nginx api-1 api-2 api-3 consu
 ```
 
 No gateway, `/health/live` verifica somente o Nginx. `/health/ready` consulta uma
-API disponível, que verifica
-PostgreSQL e filas de comandos/DLQ, incluindo FIFO/redrive/permissão.
+API disponível, que verifica PostgreSQL e filas de comandos/DLQ, incluindo
+FIFO/redrive/permissão.
 O healthcheck dos workers observa o diagnóstico JSON de startup depois dos checks
 reais e confirma que o processo ainda existe. Não mede backlog, progresso contínuo
 ou disponibilidade posterior das dependências. O smoke verifica trabalho real
@@ -83,9 +86,10 @@ que o LocalStack mantém após reinícios; a configuração geral continua em 20
 O Nginx usa SIGQUIT e até 30 segundos para drenar conexões. Seu upstream
 round-robin compartilha estado e acompanha mudanças de IP pelo DNS Docker.
 `X-Demo-Upstream` vem do proxy, inclusive em erros, e não altera o JSON da API.
-Logs de acesso JSON contêm apenas roteamento, status e tempos. Não há cache;
-conexão tem timeout de 1 segundo e no máximo três tentativas, sem reenviar POST
-já encaminhado. Falha de conexão sem backend disponível retorna 503.
+Os logs de acesso são JSON e registram apenas roteamento, status e tempos.
+O proxy não usa cache. A conexão tem timeout de 1 segundo e no máximo três
+tentativas; POST já encaminhado não é reenviado. Sem backend disponível, falhas
+de conexão retornam 503.
 
 ## Falha e recuperação de uma API
 
@@ -96,12 +100,14 @@ docker compose -f compose.demo.yaml up -d --no-deps --force-recreate --wait api-
 docker compose -f compose.demo.yaml run --rm smoke
 ```
 
-Com `api-3` parada, readiness e HTTP continuam pelas outras duas. Após recriação,
-o smoke completo exige novamente as três, sem reiniciar Nginx. Durante a falha,
-o smoke completo deve falhar porque exige a topologia inteira. Se todas as APIs
-pararem, readiness retorna 503 e liveness do proxy continua 200. Nginx parado faz
-o smoke falhar. O CI também força troca de IP na recriação para conferir DNS e
-compara IDs dos containers antes/depois dos dois primeiros smokes.
+Com `api-3` parada, as outras duas atendem HTTP e readiness. O smoke completo
+exige as três APIs e falha enquanto uma estiver fora. Após recriar `api-3`, ele
+deve passar sem reiniciar Nginx. Se todas as APIs pararem, readiness retorna 503
+e liveness do proxy continua em 200. Com Nginx parado, o smoke falha.
+
+No CI, a API recriada precisa receber outro IP para testar a atualização por DNS.
+O workflow também compara os IDs dos containers antes e depois dos dois primeiros
+smokes.
 
 ## Suíte completa
 
