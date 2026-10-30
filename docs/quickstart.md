@@ -36,6 +36,7 @@ Também confirma PENDING_REFERENCE e sua resolução pelo worker. Ao final a wal
 do cenário tem `25.00 BRL`: os `20.00` iniciais recebem WIN de `5.00`, e BET/REFUND
 de `3.00` se compensam. São cinco lançamentos e dez eventos, sem contar abertura
 como evento Wagering. IDs relevantes aparecem na saída.
+Ele usa a stack já iniciada pelo comando de startup, sem subir ou recriar serviços.
 
 Pode executar novamente. O smoke cria dados novos e não limpa tabelas. Ele
 consome e confirma somente eventos da wallet que criou; mensagens de outras

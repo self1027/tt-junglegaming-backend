@@ -133,15 +133,8 @@ services:
         environment:
             <<: *environment
             API_BASE_URL: http://api:3000
-        depends_on:
-            api:
-                condition: service_healthy
-            consumer:
-                condition: service_healthy
-            publisher:
-                condition: service_healthy
-            pending-worker:
-                condition: service_healthy
+        # Attach to the stack started by up; run must never recreate its processes.
+        depends_on: {}
 
 volumes:
     demo_postgres_data:

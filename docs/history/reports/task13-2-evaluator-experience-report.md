@@ -97,6 +97,12 @@ construído somente pelo serviço API; os demais serviços reutilizam sua imagem
 O CI compara os IDs dos containers antes/depois dos dois smokes para impedir
 regressão de ciclo de vida.
 
+O build único passou na verificação local, mas o guard detectou nova recriação
+no runner mesmo com os dois smokes aprovados. O serviço smoke passou a declarar
+dependências vazias: ele se conecta à stack que `up --wait` já preparou, sem
+reconciliar seus processos ou repetir bootstrap. Os checks financeiros e de
+trabalho real continuam obrigatórios; executar sem a stack falha.
+
 Os logs também sustentam a hipótese de um long poll antigo receber o WIN depois
 do encerramento do consumer, deixando a mensagem invisível por 60 segundos,
 além do prazo de 45 segundos do smoke. Não identificam diretamente o destinatário
