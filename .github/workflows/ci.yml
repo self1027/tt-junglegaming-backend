@@ -102,10 +102,10 @@ jobs:
                   echo "$wallet" | jq -e '.balance == {amount: "100.00", currency: "BRL"}'
                   wallet_id=$(echo "$wallet" | jq -r '.id')
                   curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:3000/wallets/$wallet_id" | jq -e '.balance == {amount: "100.00", currency: "BRL"}'
-                  # Reserve the released address so recreation really tests Docker DNS updates.
+                  # Allocate another endpoint, then require recreation to change the API address.
                   docker compose -f compose.demo.yaml rm -f api-3
                   trap 'docker rm -f dwp-demo-old-api-address || true' EXIT
-                  docker run -d --rm --name dwp-demo-old-api-address --network dwp-demo_default --ip "$old_ip" --entrypoint sleep nginxinc/nginx-unprivileged:1.30.6-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03 180
+                  docker run -d --rm --name dwp-demo-old-api-address --network dwp-demo_default --entrypoint sleep nginxinc/nginx-unprivileged:1.30.6-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03 180
                   docker compose -f compose.demo.yaml up -d --no-deps --force-recreate --wait --wait-timeout 180 api-3
                   test "$old_api_id" != "$(docker compose -f compose.demo.yaml ps -q api-3)"
                   new_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(docker compose -f compose.demo.yaml ps -q api-3)")

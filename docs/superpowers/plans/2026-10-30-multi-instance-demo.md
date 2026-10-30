@@ -39,8 +39,10 @@ pools and shutdown. No domain, migration, RE-03 or message contract changes.
 - [x] Extend CI with degraded operation, backend recreation, complete smoke after
       recovery, unavailable proxy, all APIs down and diagnostic artifacts.
 - [x] Update README, quickstart and architecture; verify docs and graph update.
-- [ ] Run format:check, typecheck, lint, build and full suite. Review changes,
-      commit/push feature branch, open new PR and inspect remote CI. Never merge.
+- [x] Run format:check, typecheck, lint, build and full suite. Review changes,
+      commit/push feature branch and open new PR. Never merge.
+- Remote CI results are tracked in PR #2; the execution record below describes
+  observations at commit time.
 
 ## Execution record
 
@@ -65,4 +67,8 @@ pools and shutdown. No domain, migration, RE-03 or message contract changes.
 - Independent review: no blocking findings. YAML parsed and all seventeen CI
   shell steps passed bash -n. Access logs parsed as JSON with routing/timing only.
 - format:check, typecheck, lint (including architecture), build and four
-  documentation tests passed. Full suite and remote CI pending below.
+  documentation tests passed. Full suite: 487 pass, 0 fail, 38 files (469.86s).
+- PR #2 opened as draft while CI runs. First remote quality/startup/two smokes/
+  restart passed. The recreation harness failed because the runner Docker rejects
+  static IP assignment on automatic subnets. Use dynamic endpoint allocation
+  instead, retaining the assertion that the recreated API has a different IP.
