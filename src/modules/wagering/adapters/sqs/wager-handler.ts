@@ -17,8 +17,9 @@ export function wagerHandler(
 			const result = await useCase.execute(command, delivery);
 			return {
 				messageId: delivery.messageId,
+				correlationId: result?.transactionId ?? delivery.messageId,
 				providerId: command.providerId,
-				walletId: command.walletId,
+				walletId: result?.walletId ?? command.walletId,
 				status: result?.status ?? 'DUPLICATE',
 				...(result === undefined
 					? {}

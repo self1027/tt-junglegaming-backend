@@ -47,6 +47,8 @@ export interface WagerTransactionRepository {
 	findProcessedReversalKinds(
 		referenceTransactionId: string,
 	): Promise<readonly WagerReversalKind[]>;
+	/** Caller holds the wallet lock. Only a processed, matching rollback counts. */
+	hasReversedRefund(betTransactionId: string): Promise<boolean>;
 }
 
 export type IdempotencyClaim =

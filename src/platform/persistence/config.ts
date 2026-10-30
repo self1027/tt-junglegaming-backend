@@ -6,6 +6,8 @@ import { Migration202610280001 } from './migrations/Migration202610280001.js';
 import { Migration202610280002 } from './migrations/Migration202610280002.js';
 import { Migration202610290001 } from './migrations/Migration202610290001.js';
 import { Migration202610290002 } from './migrations/Migration202610290002.js';
+import { Migration202610290003 } from './migrations/Migration202610290003.js';
+import { Migration202610290004 } from './migrations/Migration202610290004.js';
 
 function required(env: NodeJS.ProcessEnv, key: string): string {
 	const value = env[key];
@@ -60,6 +62,8 @@ export function persistenceConfig(
 				Migration202610280002,
 				Migration202610290001,
 				Migration202610290002,
+				Migration202610290003,
+				Migration202610290004,
 			],
 			transactional: true,
 			allOrNothing: true,

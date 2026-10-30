@@ -4,6 +4,7 @@ import { PendingClaimLostError } from '../../public/pending.js';
 import type { PendingWagerStore } from '../../public/pending.js';
 import { pendingBackoff } from './pending-config.js';
 import type { PendingWorkerConfig } from './pending-config.js';
+import { diagnostic } from '../../../../platform/observability/diagnostic.js';
 
 export class PendingReferenceWorker {
 	private readonly stop = new AbortController();
@@ -28,6 +29,7 @@ export class PendingReferenceWorker {
 				await Promise.all(
 					claims.map(async claim => {
 						if (this.stop.signal.aborted) return;
+						const started = Date.now();
 						const delayMs = pendingBackoff(
 							claim.attempts,
 							this.config,
@@ -51,18 +53,18 @@ export class PendingReferenceWorker {
 								}
 							}
 						}
-						console.log(
-							JSON.stringify({
-								event: 'pending_attempt',
-								instanceId: this.config.instanceId,
-								pid: process.pid,
-								transactionId: claim.transaction.id,
-								walletId: claim.transaction.walletId,
-								providerId: claim.transaction.providerId,
-								attempts: claim.attempts,
-								outcome,
-							}),
-						);
+						diagnostic({
+							event: 'pending_attempt',
+							instanceId: this.config.instanceId,
+							pid: process.pid,
+							transactionId: claim.transaction.id,
+							correlationId: claim.transaction.id,
+							latencyMs: Date.now() - started,
+							walletId: claim.transaction.walletId,
+							providerId: claim.transaction.providerId,
+							attempts: claim.attempts,
+							outcome,
+						});
 					}),
 				);
 			} catch {

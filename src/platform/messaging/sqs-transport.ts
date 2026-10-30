@@ -8,6 +8,7 @@ import type { SqsConfig } from './sqs-config.js';
 import type { MessageTransport, ReceivedMessage } from './transport.js';
 import type { SQSClient } from '@aws-sdk/client-sqs';
 import { createSqsClient } from './sqs-client.js';
+import { diagnostic } from '../observability/diagnostic.js';
 
 export class SqsTransport implements MessageTransport {
 	private readonly client: SQSClient;
@@ -106,6 +107,7 @@ export class SqsTransport implements MessageTransport {
 						'FifoQueue',
 						'QueueArn',
 						'RedriveAllowPolicy',
+						'ApproximateNumberOfMessages',
 					],
 				}),
 				{ abortSignal: AbortSignal.timeout(3000) },
@@ -145,6 +147,10 @@ export class SqsTransport implements MessageTransport {
 			Number(policy.maxReceiveCount) !== this.config.maxReceiveCount
 		)
 			throw new Error('SQS FIFO/redrive configuration mismatch');
+		diagnostic({
+			event: 'sqs_diagnostics',
+			visible: Number(dlq.Attributes.ApproximateNumberOfMessages),
+		});
 	}
 
 	close(): void {

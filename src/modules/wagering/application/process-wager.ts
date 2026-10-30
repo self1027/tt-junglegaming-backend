@@ -40,14 +40,19 @@ export async function processWager(
 			transaction.providerId,
 			transaction.referenceExternalTransactionId,
 		);
-		if (found !== undefined)
+		if (found !== undefined) {
+			const processedReversalKinds =
+				await context.transactions.findProcessedReversalKinds(found.id);
 			reference = {
 				transaction: found,
-				processedReversalKinds:
-					await context.transactions.findProcessedReversalKinds(
-						found.id,
-					),
+				processedReversalKinds,
+				refundReversed:
+					transaction.kind === 'ROLLBACK' &&
+					found.kind === 'BET' &&
+					processedReversalKinds.includes('REFUND') &&
+					(await context.transactions.hasReversedRefund(found.id)),
 			};
+		}
 	}
 	let decision;
 	try {

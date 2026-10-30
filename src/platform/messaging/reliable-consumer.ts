@@ -6,10 +6,12 @@ import type {
 	ReceivedMessage,
 } from './transport.js';
 import type { SqsConfig } from './sqs-config.js';
+import { diagnostic } from '../observability/diagnostic.js';
 
 export class ReliableConsumer {
 	private stopping = false;
 	private readonly polling = new AbortController();
+	private nextDiagnostic = 0;
 
 	constructor(
 		private readonly transport: MessageTransport,
@@ -19,9 +21,7 @@ export class ReliableConsumer {
 		) => Promise<MessageOutcome>,
 		private readonly diagnose: (
 			record: Record<string, unknown>,
-		) => void = record => {
-			console.log(JSON.stringify(record));
-		},
+		) => void = diagnostic,
 	) {}
 
 	requestStop(): void {
@@ -42,6 +42,18 @@ export class ReliableConsumer {
 		let failures = 0;
 		while (!this.isStopping()) {
 			try {
+				if (Date.now() >= this.nextDiagnostic) {
+					this.nextDiagnostic = Date.now() + 30000;
+					try {
+						await this.transport.check();
+					} catch {
+						this.diagnose({
+							event: 'sqs_diagnostics_failed',
+							pid: process.pid,
+						});
+					}
+				}
+				if (this.isStopping()) break;
 				// One receipt per call prevents poison from spending successors' redrive attempts.
 				const messages = await this.transport.receive(
 					1,
@@ -201,6 +213,7 @@ export class ReliableConsumer {
 		message: ReceivedMessage,
 		seconds: number,
 	): Promise<void> {
+		this.log('message_retry', message, { delaySeconds: seconds });
 		try {
 			await this.transport.visibility(message, seconds);
 		} catch {

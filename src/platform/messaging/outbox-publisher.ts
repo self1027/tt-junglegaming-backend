@@ -2,6 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { InvalidOutboxEvent } from './outbox.js';
 import type { EventPublisher, OutboxClaim, OutboxStore } from './outbox.js';
 import type { PublisherConfig } from './publisher-config.js';
+import { diagnostic, diagnosticIdentity } from '../observability/diagnostic.js';
 
 export function publicationFailure(error: unknown): {
 	code: string;
@@ -67,9 +68,7 @@ export class OutboxPublisher {
 		private readonly config: PublisherConfig,
 		private readonly diagnose: (
 			record: Record<string, unknown>,
-		) => void = record => {
-			console.log(JSON.stringify(record));
-		},
+		) => void = diagnostic,
 	) {}
 
 	requestStop(): void {
@@ -149,6 +148,7 @@ export class OutboxPublisher {
 	async publish(claim: OutboxClaim): Promise<void> {
 		const started = Date.now();
 		const context = {
+			...diagnosticIdentity(claim.payload.data),
 			eventId: claim.eventId,
 			eventType: claim.eventType,
 			correlationId: claim.correlationId,

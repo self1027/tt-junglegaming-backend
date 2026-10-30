@@ -10,11 +10,11 @@ Escopo: mecanismos técnicos de persistência. Consulte a unidade de trabalho e 
 
 Exija evidências reais no PostgreSQL quando a garantia depender do banco; mocks não demonstram constraints, locks ou atomicidade.
 
-Exceção técnica explícita: OutboxStore abre transação curta própria para claim com SKIP LOCKED e confirma antes de SendMessage. Não integra nem prolonga a TransactionSession financeira. Finalização/retry são UPDATEs atômicos com token/PENDING/lease válido. [Contrato](../../../docs/persistence.md#task-10--aquisição-e-confirmação-da-outbox).
+Exceção técnica explícita: OutboxStore abre transação curta própria para claim com SKIP LOCKED e confirma antes de SendMessage. Não integra nem prolonga a TransactionSession financeira. Finalização/retry são UPDATEs atômicos com token/PENDING/lease válido. [Contrato](../../../docs/persistence.md#claims-e-fencing).
 
 Task 11: PendingWagerStore do adapter Wagering também confirma aquisição curta
 com SKIP LOCKED antes de esperar wallet. A resolução financeira continua na
 TransactionSession recebida, com lock da pendência após idempotência/identidade/wallet
 e finalização condicional no mesmo commit. Retry técnico isolado só após retorno
 da UnitOfWork; nunca dividir saldo/ledger/idempotência/Outbox/finalização.
-[Contrato](../../../docs/persistence.md#task-11--claims-de-referências).
+[Contrato](../../../docs/persistence.md#claims-e-fencing).

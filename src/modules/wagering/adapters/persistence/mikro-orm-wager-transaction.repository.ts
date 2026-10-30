@@ -93,6 +93,27 @@ export class MikroOrmWagerTransactionRepository implements WagerTransactionRepos
 		});
 	}
 
+	async hasReversedRefund(betTransactionId: string): Promise<boolean> {
+		const rows = await this.session.em.execute<{ neutralized: boolean }[]>(
+			`select exists (
+				select 1 from wager_transactions bet
+				join wager_transactions refund on refund.reference_transaction_id = bet.id
+				join wager_transactions rollback on rollback.reference_transaction_id = refund.id
+				where bet.id = ? and bet.kind = 'BET' and bet.status = 'PROCESSED'
+					and refund.kind = 'REFUND' and refund.status = 'PROCESSED'
+					and rollback.kind = 'ROLLBACK' and rollback.status = 'PROCESSED'
+					and refund.reference_external_transaction_id = bet.external_transaction_id
+					and rollback.reference_external_transaction_id = refund.external_transaction_id
+					and (refund.wallet_id, refund.player_id, refund.provider_id, refund.currency, refund.round_id, refund.amount)
+						= (bet.wallet_id, bet.player_id, bet.provider_id, bet.currency, bet.round_id, bet.amount)
+					and (rollback.wallet_id, rollback.player_id, rollback.provider_id, rollback.currency, rollback.round_id, rollback.amount)
+						= (refund.wallet_id, refund.player_id, refund.provider_id, refund.currency, refund.round_id, refund.amount)
+			) as neutralized`,
+			[betTransactionId],
+		);
+		return rows[0]?.neutralized === true;
+	}
+
 	async insertProcessed(record: ProcessedWagerRecord): Promise<void> {
 		await this.session.em.insert(WagerTransactionRow, {
 			id: record.id,

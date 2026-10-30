@@ -46,6 +46,8 @@ export interface WagerTransactionState extends CreateWagerTransactionProps {
 export interface WagerReference {
 	readonly transaction: WagerTransaction;
 	readonly processedReversalKinds: readonly WagerReversalKind[];
+	/** A processed rollback neutralized the processed refund of this BET. */
+	readonly refundReversed?: boolean;
 }
 
 const kinds: readonly string[] = ['BET', 'WIN', 'LOSS', 'REFUND', 'ROLLBACK'];
@@ -284,7 +286,15 @@ export class WagerTransaction {
 						'Reference already reversed by this operation kind',
 					);
 				}
-				if (reference.processedReversalKinds.length > 0) {
+				if (
+					reference.processedReversalKinds.length > 0 &&
+					!(
+						this.kind === 'ROLLBACK' &&
+						reference.transaction.kind === 'BET' &&
+						reference.processedReversalKinds.includes('REFUND') &&
+						reference.refundReversed === true
+					)
+				) {
 					return Object.freeze({
 						type: 'POLICY_REQUIRED',
 						policy: 'CROSS_TYPE_REVERSAL',
