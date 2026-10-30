@@ -30,6 +30,7 @@
 		"format:check": "bun --bun prettier . --check",
 		"format": "bun --bun prettier . --write",
 		"test": "bun test",
+		"test:load": "bun docker/load.ts",
 		"db:migrate": "bun --bun mikro-orm migration:up --config src/platform/persistence/mikro-orm.config.ts",
 		"db:rollback": "bun --bun mikro-orm migration:down --config src/platform/persistence/mikro-orm.config.ts",
 		"db:status": "bun --bun mikro-orm migration:list --config src/platform/persistence/mikro-orm.config.ts && bun --bun mikro-orm migration:pending --config src/platform/persistence/mikro-orm.config.ts"

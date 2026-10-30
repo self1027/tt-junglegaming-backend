@@ -181,6 +181,30 @@ services:
             API_BASE_URL: http://nginx:8080
         # Attach to the stack started by up; run must never recreate its processes.
         depends_on: {}
+    load:
+        <<: *app
+        profiles: [tools]
+        command: [bun, docker/load/main.ts]
+        # Tool-only user permits writing the bind mount on Linux and Docker Desktop.
+        user: '${LOAD_UID:-0}:${LOAD_GID:-0}'
+        environment:
+            LOAD_TARGET: demo
+            LOAD_PROFILE: '${LOAD_PROFILE:-quick}'
+            LOAD_DURATION_MS: '${LOAD_DURATION_MS:-}'
+            LOAD_WARMUP_MS: '${LOAD_WARMUP_MS:-}'
+            LOAD_CONCURRENCY: '${LOAD_CONCURRENCY:-}'
+            LOAD_WALLETS: '${LOAD_WALLETS:-}'
+            LOAD_MAX_OPERATIONS: '${LOAD_MAX_OPERATIONS:-}'
+            LOAD_SQS_RATE: '${LOAD_SQS_RATE:-}'
+            LOAD_TIMEOUT_MS: '${LOAD_TIMEOUT_MS:-}'
+            LOAD_DRAIN_MS: '${LOAD_DRAIN_MS:-}'
+        volumes:
+            - ./docker:/app/docker:ro
+            - ./.git:/app/.git:ro
+            - ./compose.demo.yaml:/app/compose.demo.yaml:ro
+            - ./load-results:/app/load-results
+        # Reuse the running demo; never start/recreate APIs, workers or storage.
+        depends_on: {}
 
 volumes:
     demo_postgres_data:

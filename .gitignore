@@ -4,3 +4,4 @@ coverage/
 .env
 .architecture-fixtures/
 graphify-out/
+load-results/
