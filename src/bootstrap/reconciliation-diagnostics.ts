@@ -1,4 +1,5 @@
 import type { ReconciliationDiagnostics } from '../modules/financial/public/wallet-api.js';
+import { diagnostic } from '../platform/observability/diagnostic.js';
 
 export class WalletReconciliationDiagnostics implements ReconciliationDiagnostics {
 	#divergences = 0;
@@ -9,12 +10,10 @@ export class WalletReconciliationDiagnostics implements ReconciliationDiagnostic
 
 	divergence(walletId: string): void {
 		this.#divergences++;
-		console.warn(
-			JSON.stringify({
-				event: 'wallet_reconciliation_divergence',
-				walletId,
-				divergences: this.#divergences,
-			}),
-		);
+		diagnostic({
+			event: 'wallet_reconciliation_divergence',
+			walletId,
+			divergences: this.#divergences,
+		});
 	}
 }

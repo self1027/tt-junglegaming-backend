@@ -1,5 +1,6 @@
 import { Catch, HttpException } from '@nestjs/common';
 import type { ArgumentsHost, ExceptionFilter } from '@nestjs/common';
+import { diagnostic } from '../platform/observability/diagnostic.js';
 import { FinancialApplicationError } from '../modules/financial/public/wallet-api.js';
 import { WagerApplicationError } from '../modules/wagering/public/index.js';
 import {
@@ -54,6 +55,9 @@ export class HttpErrorFilter implements ExceptionFilter {
 							'57P01',
 							'57P02',
 							'57P03',
+							'57014',
+							'25P03',
+							'25P04',
 							'53300',
 							'53400',
 							'55P03',
@@ -77,6 +81,12 @@ export class HttpErrorFilter implements ExceptionFilter {
 				code = 'WALLET_ALREADY_EXISTS';
 			}
 		}
+		diagnostic({
+			event: 'http_failure',
+			correlationId: crypto.randomUUID(),
+			statusCode: status,
+			code,
+		});
 		host.switchToHttp()
 			.getResponse<{
 				status(code: number): { json(body: unknown): void };

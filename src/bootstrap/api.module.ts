@@ -5,7 +5,8 @@ import { UNIT_OF_WORK } from '../modules/financial/public/index.js';
 import { createUnitOfWork } from './persistence.js';
 import { HealthController } from '../platform/observability/health.controller.js';
 import { persistenceConfig } from '../platform/persistence/config.js';
-import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { WagerDiagnosticsInterceptor } from './wager-diagnostics.interceptor.js';
 import { WalletController } from '../modules/financial/adapters/http/wallet.controller.js';
 import { WagerController } from '../modules/wagering/adapters/http/wager.controller.js';
 import { CreateWalletUseCase } from '../modules/financial/application/create-wallet.use-case.js';
@@ -30,6 +31,7 @@ import { SQS_TRANSPORT, optionalSqsTransport } from './sqs.js';
 	],
 	controllers: [HealthController, WalletController, WagerController],
 	providers: [
+		{ provide: APP_INTERCEPTOR, useClass: WagerDiagnosticsInterceptor },
 		{ provide: APP_GUARD, useClass: NoAuthGuard },
 		{ provide: SQS_TRANSPORT, useFactory: optionalSqsTransport },
 		{

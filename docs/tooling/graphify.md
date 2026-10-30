@@ -19,7 +19,7 @@ uv tool install --python 3.12 graphifyy==0.9.97
 uv tool update-shell
 ```
 
-Também é possível baixar o binário Windows da release oficial e conferir seu SHA-256 antes de copiar uv/uvx/uvw para `.local/bin`, como feito na recuperação abaixo. Não é necessário instalar Python global: uv resolve o Python 3.12 isolado. Abra outro terminal e **reinicie o Codex desktop** depois de alterar o PATH; processos já abertos conservam o ambiente anterior. Para continuar no PowerShell atual:
+Também é possível baixar o binário Windows da release oficial e conferir seu SHA-256 antes de copiar uv/uvx/uvw para `.local/bin`, como feito na [recuperação registrada](../history/reports/tooling-recovery-report.md#graphify). Não é necessário instalar Python global: uv resolve o Python 3.12 isolado. Abra outro terminal e **reinicie o Codex desktop** depois de alterar o PATH; processos já abertos conservam o ambiente anterior. Para continuar no PowerShell atual:
 
 ```powershell
 $env:PATH = "$env:USERPROFILE/.local/bin;$env:USERPROFILE/.bun/bin;$env:PATH"
@@ -31,22 +31,6 @@ graphify --version
 uv instala o Python compatível quando necessário e mantém o CLI em ambiente isolado. A skill local é mantida neste repositório; não é necessário executar o gerador de integração do Graphify nem acrescentar AGENTS/hooks. O CLI 0.9.97 pode atualizar automaticamente a skill global `~/.codex/skills/graphify` durante comandos comuns; `GRAPHIFY_NO_AUTO_REFRESH=1` evita essa alteração quando se deseja somente consultar/atualizar o índice. Não habilite multi-agent ou backends para esse fluxo.
 
 Atualizações de versão são uma tarefa explícita: revise release/CLI, atualize a versão documentada, reinstale com a versão escolhida e valide construção, consultas e descoberta da skill. Para remover somente o CLI: `uv tool uninstall graphifyy`; isso não remove a documentação/skill local.
-
-## Recuperação verificada — 2026-10-28
-
-Na Task 06, o executável Graphify e uv não estavam disponíveis no PATH nem nos locais de instalação verificados; o índice não existia. A presença da skill não significava instalação do CLI. A causa histórica da ausência não foi determinada.
-
-Recuperação autorizada posteriormente pelo usuário:
-
-- uv **0.13.6** instalado por binário oficial Windows x86_64, SHA-256 conferido contra o digest da release: `a2a8820d5eea32f08ef467ef3b7f66883a9b076d5737a2fc2fbb5f458d1bb50f`.
-- `uv tool install --python 3.12 graphifyy==0.9.97` concluiu; `uv tool list` lista graphify e graphify-mcp. Não foi configurado servidor MCP ou backend externo.
-- `uv tool update-shell` adicionou `.local/bin` ao PATH do usuário; `.bun/bin` também foi incluído para executar os scripts existentes. Reabrir o Codex aplica esse ambiente às novas sessões.
-- A primeira consulta atualizou automaticamente a skill global de 0.9.94 para 0.9.97, preservando `SKILL.md.bak`. A skill `.agents/skills/graphify/SKILL.md` do projeto foi preservada. Comandos posteriores usaram `GRAPHIFY_NO_AUTO_REFRESH=1`.
-- `bun run graph:build` passou: **679 nós, 1511 relações e 40 comunidades**, extração estrutural local de 93 arquivos; HTML, JSON e relatório gerados em `graphify-out/`, ignorado pelo Git. Contagens podem mudar após atualização da documentação.
-- `graph:query "ProcessWagerUseCase idempotencyScope"`, `graph:explain "ProcessWagerUseCase"` e `graph:path "ProcessWagerUseCase" "WagerTransaction"` passaram. Caminho encontrado em dois saltos pela relação de import do arquivo do caso de uso.
-- Cinco arquivos não produziram símbolos individuais, incluindo barrels públicos, configuração CLI e duas fixtures/testes; seus imports/conteúdo continuam exigindo confirmação direta. Ausência no grafo não prova ausência de implementação.
-
-Nenhuma dependência da aplicação, contrato financeiro ou configuração strict foi alterada para instalar o tooling. Não foram ativados Cloud, watcher, Git hooks ou extração semântica por LLM.
 
 ## Comandos do projeto
 
