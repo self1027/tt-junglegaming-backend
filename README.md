@@ -54,9 +54,9 @@ flowchart TB
 
 </div>
 
-APIs e consumers executam o mesmo `ProcessWagerUseCase`. O PostgreSQL coordena
-saldo e idempotência por wallet. Os publishers enviam os eventos da Outbox para
-SQS; o worker de referências resolve as operações pendentes no banco.
+APIs e consumers executam o mesmo `ProcessWagerUseCase`. O worker de referências
+resolve as operações pendentes, persiste os resultados no banco e grava os eventos
+na Outbox no mesmo commit financeiro. Os publishers enviam esses eventos para SQS.
 
 ## Execute com Docker
 

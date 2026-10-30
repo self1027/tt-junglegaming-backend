@@ -1,9 +1,9 @@
 # Teste de carga e análise de performance
 
 O benchmark exercita a demonstração real pelo Nginx e pelo SQS. Cada execução
-cria identidades próprias e mantém os registros financeiros. Não há mudança em
-`src/`, nos locks, na idempotência ou nas configurações dos processos para obter
-throughput maior. O diferencial opcional corresponde ao
+cria identidades próprias e mantém os registros financeiros. As medições mantêm
+`src/`, os locks, a idempotência e as configurações dos processos da demo inalterados.
+O benchmark opcional corresponde ao
 [§14 do desafio](../challenge.md#14-avaliação--100-pontos).
 
 ## Executar
@@ -149,9 +149,10 @@ de wallet com FOR UPDATE. Uma espera bem-sucedida não é conflito SQL.
 ## Ambiente das execuções
 
 As execuções finais ocorreram em 30/10/2026, entre 12:42 e 12:45 no fuso
-America/Sao_Paulo. Branch `feat/load-testing`, commit
-`f4a54d7cdb3d65048873973945d836c831751d78`; aplicação preservada da main
-`a791f01852fbb22a4e15d2af0d2323873e0a89e3`.
+America/Sao_Paulo. Na ocasião, o checkout estava na branch `feat/load-testing`,
+commit `f4a54d7cdb3d65048873973945d836c831751d78`, com a aplicação preservada da
+main `a791f01852fbb22a4e15d2af0d2323873e0a89e3`. Essas referências identificam o
+código usado nas medições.
 
 | Item                                       | Valor detectado                                                                                   |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------- |
@@ -329,7 +330,8 @@ incompleto, inclusive sinal durante cleanup/persistência e antes da criação d
 container. PostgreSQL real cobre o observador read-only e a recusa de cadeias
 desconectadas, fatos não publicados e saldo divergente em fixtures isoladas.
 
-Quick via Docker e Standard via launcher passaram no commit registrado. O smoke
+As verificações desta seção se referem à entrega da ferramenta no commit registrado.
+Quick via Docker e Standard via launcher passaram. O smoke
 original passou após as cargas na mesma stack, com seus dez eventos recebidos.
 O benchmark não foi acrescentado ao CI obrigatório. A suíte da ferramenta integra
 a regressão; não há workflow adicional de carga nem nova stack de observabilidade.
@@ -353,6 +355,6 @@ não fazem reconciliação automática nem removem os dados já confirmados.
 | Identidade dos containers da demo                            | Os mesmos 11 IDs antes e depois das execuções      |
 
 A conferência de links, âncoras, frontmatter e comandos faz parte da suíte.
-Graphify foi atualizado e localiza o driver e o observador. O diff não contém
-alterações em `src/` nem no enunciado. A validação é local; não houve push,
-execução remota do CI ou merge na main nesta entrega.
+Graphify foi atualizado e localiza o driver e o observador. Esses resultados são
+de validação local; o resultado remoto do CI deve ser consultado na execução
+do commit correspondente.

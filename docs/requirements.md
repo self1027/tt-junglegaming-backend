@@ -1,10 +1,9 @@
 # Matriz de requisitos e conformidade
 
-Fonte primária: [challenge.md](challenge.md), lido integralmente antes da auditoria.
-As seções §n abaixo são do enunciado original, que não foi alterado. A
-[auditoria preliminar](history/reports/task12-audit-report.md#fase-a-diagnóstico-anterior-às-alterações)
+Fonte primária: [challenge.md](challenge.md). As seções §n abaixo são do enunciado
+original. A [auditoria preliminar](history/reports/task12-audit-report.md#fase-a-diagnóstico-anterior-às-alterações)
 precedeu correções e reorganização. Código, constraints e testes sustentam os
-estados; documentos apenas localizam/explicam as evidências.
+estados; os links indicam onde consultar as evidências e seus limites.
 
 ## Classificação
 
@@ -14,8 +13,10 @@ não existe. PLANNED descreve desenho futuro explicitamente separado. HISTORICAL
 registra etapa anterior. UNVERIFIED exige evidência adicional e não conta como
 atendido. O significa obrigatório; C é escolha admitida; X é opcional.
 
-E1 é a execução funcional da Fase B; E2 é a validação posterior à documentação,
-registrada na [Fase D](history/reports/task12-audit-report.md#fase-d-validação-final).
+E1 é a execução funcional da Fase B. E2 indica a validação final do escopo:
+a [Fase D](history/reports/task12-audit-report.md#fase-d-validação-final) para os
+requisitos auditados e a [validação da ferramenta de carga](testing/load-test.md#validação-da-entrega)
+para EX-02, realizada depois da auditoria.
 Os resultados não garantem comportamentos fora dos cenários executados. Cada
 linha aponta código/teste e documento responsável; limites comuns estão ao final.
 
@@ -123,8 +124,7 @@ Uma compensação ainda ativa continua bloqueando outro crédito direto. Essa
 política adicional trata uma combinação não especificada integralmente pelo §7.4;
 o [relatório da Task 12.1](history/reports/task12-1-re03-conformance-report.md)
 separa regra literal, interpretação e evidência. Não reabre terminais antigos nem
-altera o enunciado. O estado de RE-03 depende da validação consolidada registrada
-na sua linha, sem substituir evidência por mudança de descrição.
+altera o enunciado. A linha de RE-03 aponta a validação consolidada.
 
 Métricas são medições JSON best effort, sem backend, durabilidade ou agregação.
 FAILED é suportado como estado/transição explícita; falhas técnicas genéricas
@@ -134,5 +134,4 @@ perda física de disco não são funcionalidades ou garantias comprovadas.
 
 Documentos de [histórico](history/README.md) são HISTORICAL. Desenho de IdP e
 coordenação futura de múltiplas wallets são PLANNED, separados do comportamento
-entregue. Não existem funcionalidades obrigatórias ocultadas por remoção de texto;
-as lacunas da Fase A e as correções estão no relatório.
+entregue. As lacunas da Fase A e as correções estão no relatório.

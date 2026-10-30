@@ -27,7 +27,8 @@ loopback. Para trocar a porta, defina `DEMO_PORT` no terminal antes de subir a s
 A topologia é fixa. Nginx distribui HTTP entre `api-1`, `api-2` e `api-3`.
 A stack também executa
 `consumer-1/2`, `publisher-1/2`, `pending-worker`, PostgreSQL e LocalStack. Os dois
-publishers enviam os eventos da Outbox; `pending-worker` resolve referências.
+publishers enviam os eventos da Outbox; `pending-worker` resolve referências e
+persiste os resultados no banco e os eventos na Outbox no mesmo commit financeiro.
 Os processos Bun usam a imagem runtime compilada por `api-1`, cada um com seu
 pool, healthcheck e ciclo de vida. O job de migrations usa o target da CLI.
 Locks por wallet, idempotência, Inbox e claims de Outbox são coordenados no
@@ -42,9 +43,9 @@ docker compose -f compose.demo.yaml run --rm smoke
 O processo termina com zero somente depois de verificar 100/80/80, replay,
 conflito, duas entregas SQS da mesma mensagem, reconciliação e eventos publicados.
 Também confirma PENDING_REFERENCE e sua resolução pelo worker. Ao final a wallet
-do cenário tem `25.00 BRL`: os `20.00` iniciais recebem WIN de `5.00`, e BET/REFUND
-de `3.00` se compensam. São cinco lançamentos e dez eventos, sem contar abertura
-como evento Wagering. IDs relevantes aparecem na saída.
+do cenário tem `25.00 BRL`: o saldo de `20.00` após as BETs recebe WIN de `5.00`,
+e BET/REFUND de `3.00` se compensam. São cinco lançamentos e dez eventos, sem contar
+abertura como evento Wagering. IDs relevantes aparecem na saída.
 Ele usa a stack já iniciada pelo comando de startup, sem subir ou recriar serviços.
 
 Todo HTTP do smoke passa pelo Nginx. O script resolve os endereços das três APIs

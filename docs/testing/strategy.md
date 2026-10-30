@@ -91,8 +91,10 @@ O [workflow](../../.github/workflows/ci.yml) divide a validação em três jobs.
 Quality executa formatação, typecheck, lint e build. Integration roda a suíte
 completa com os harnesses reais. Docker-smoke sobe o
 [Compose independente](../../compose.demo.yaml), executa dois smokes e compara
-os IDs dos nove containers para detectar recriações. Depois repete o startup,
-reinicia os processos e roda o smoke novamente.
+os IDs dos nove containers de aplicação e proxy para detectar recriações.
+PostgreSQL e LocalStack completam os onze serviços contínuos da demo, mas não
+entram nessa comparação de IDs. Depois, o job repete o startup, reinicia os
+processos e roda o smoke novamente.
 
 O job Docker também verifica atendimento por duas APIs e recriação da terceira
 com outro IP, mantendo o mesmo Nginx. Com o proxy parado, o smoke precisa falhar.
@@ -119,7 +121,7 @@ identidades e o consumo dos eventos do próprio cenário.
 Mocks unitários cobrem decisões isoladas; só containers/processos reais sustentam
 as afirmações de concorrência, atomicidade e recuperação. A suíte não cobre AWS
 IAM gerenciada, perda física de disco, backup/failover,
-consumer downstream ou agregação durável de métricas. Não há meta de RPS.
+consumer downstream ou agregação durável de métricas.
 Contagens e tempos são resultados datados no [relatório](../history/reports/task12-audit-report.md),
 sem transformar números de uma etapa anterior em cobertura atual. O
 [benchmark local](load-test.md) tem amostras datadas e limitações próprias;

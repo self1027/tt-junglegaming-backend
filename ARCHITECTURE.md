@@ -37,8 +37,9 @@ regras; revisão humana ainda é necessária para avaliar semântica.
 
 Cada processo tem pool e ciclo de vida próprios. A API não inicia workers.
 O [Compose de demonstração](compose.demo.yaml) usa a mesma imagem compilada para
-três APIs, dois consumers, dois publishers e um worker de referências. Somente
-`api-1` constrói a imagem runtime. Um job com a CLI MikroORM aplica migrations
+três APIs, dois consumers, dois publishers e um worker de referências, com
+PostgreSQL e LocalStack para SQS. Somente `api-1` constrói a imagem runtime.
+Um job com a CLI MikroORM aplica migrations
 depois do healthcheck SQL; outro provisiona as filas depois do healthcheck SQS.
 Os processos dependentes só iniciam quando esses jobs terminam com sucesso.
 A imagem runtime não inclui a CLI nem aplica migrations no startup.
