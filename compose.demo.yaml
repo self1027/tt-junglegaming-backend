@@ -92,6 +92,7 @@ services:
         restart: 'no'
     api:
         <<: *app
+        command: [bun, --preload, ./docker/json-logger.ts, dist/main.api.js]
         ports:
             - '127.0.0.1:${DEMO_PORT:-3000}:3000'
         healthcheck:
