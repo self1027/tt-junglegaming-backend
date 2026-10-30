@@ -588,6 +588,19 @@ describe('financial persistence adapters on PostgreSQL', () => {
 			expect(await holder.next()).toBe('locked');
 			await contender.signal();
 			expect(await contender.next()).toBe('55P03');
+			expect(contender.diagnostics).toContainEqual({
+				pid: contender.pid,
+				event: 'database_conflict',
+				code: '55P03',
+				metrics: [
+					{
+						name: 'lock_conflicts_total',
+						kind: 'counter',
+						value: 1,
+						labels: {},
+					},
+				],
+			});
 			await holder.signal();
 			expect(await holder.next()).toBe('rolled-back');
 			await reconcile(wallet.id, '100.00', 1);

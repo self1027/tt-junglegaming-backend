@@ -57,6 +57,28 @@ export async function seedPending(
 	return { wallet, original, pending, id: result.transactionId };
 }
 
+export async function seedNeutralizedRollback(
+	orm: MikroORM,
+): ReturnType<typeof seedPending> {
+	const f = await seedPending(orm, '100.00', 'ROLLBACK');
+	const uc = new ProcessWagerUseCase(createUnitOfWork(orm));
+	const refund = pendingCommand(f.wallet, {
+		kind: 'REFUND',
+		referenceExternalTransactionId: f.original.externalTransactionId,
+	});
+	for (const command of [
+		f.original,
+		refund,
+		pendingCommand(f.wallet, {
+			kind: 'ROLLBACK',
+			referenceExternalTransactionId: refund.externalTransactionId,
+		}),
+	])
+		expect((await uc.execute(command)).status).toBe('PROCESSED');
+	await reconciled(orm, f.wallet.id, '20.00', 4);
+	return f;
+}
+
 export async function pendingClaim(
 	orm: MikroORM,
 	id: string,

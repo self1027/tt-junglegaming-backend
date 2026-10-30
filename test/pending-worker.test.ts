@@ -152,6 +152,7 @@ test.each(['MISSING', 'PENDING', 'PROCESSED', 'REJECTED', 'FAILED'] as const)(
 			findByExternalIdentity: () =>
 				Promise.resolve(status === 'MISSING' ? undefined : reference),
 			findProcessedReversalKinds: () => Promise.resolve([]),
+			hasReversedRefund: () => Promise.resolve(false),
 			findById: unexpected,
 			insert: unexpected,
 			insertProcessed: unexpected,

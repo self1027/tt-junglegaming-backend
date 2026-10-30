@@ -12,6 +12,14 @@ export interface TestSqs {
 	close(): Promise<void>;
 }
 
+export function sqsEnvironment(sqs: TestSqs): NodeJS.ProcessEnv {
+	return Object.fromEntries(
+		Object.entries(sqs.env).filter(
+			([key]) => key.startsWith('SQS_') || key.startsWith('AWS_'),
+		),
+	);
+}
+
 export async function startSqs(): Promise<TestSqs> {
 	const project = `dwp-sqs-${crypto.randomUUID()}`;
 	const env = {

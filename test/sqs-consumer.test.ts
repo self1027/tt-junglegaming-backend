@@ -15,7 +15,7 @@ import type { WageringUnitOfWork } from '../src/modules/wagering/public/persiste
 import type { WagerTransactionKind } from '../src/modules/wagering/public/index.js';
 import { startPostgres, testOrm } from './support/postgres.js';
 import type { TestPostgres } from './support/postgres.js';
-import { startSqs } from './support/sqs.js';
+import { startSqs, sqsEnvironment } from './support/sqs.js';
 import type { TestSqs } from './support/sqs.js';
 import { startConsumer } from './support/consumer-child.js';
 import type { ConsumerChild } from './support/consumer-child.js';
@@ -38,12 +38,7 @@ beforeAll(async () => {
 	cleanup.push(() => orm.close(true));
 	await orm.migrator.up();
 	uow = createUnitOfWork(orm);
-	Object.assign(process.env, postgres.env, sqs.env, {
-		...postgres.env,
-		...sqs.env,
-		POSTGRES_PORT: postgres.env.POSTGRES_PORT,
-		POSTGRES_PASSWORD: postgres.env.POSTGRES_PASSWORD,
-	});
+	Object.assign(process.env, postgres.env, sqsEnvironment(sqs));
 	app = await createApi();
 	cleanup.push(() => app.close());
 	app.useLogger(false);
@@ -142,8 +137,8 @@ async function send(
 async function child(mode = 'normal', concurrency = 1): Promise<ConsumerChild> {
 	const instance = await startConsumer(
 		{
-			...sqs.env,
 			...postgres.env,
+			...sqsEnvironment(sqs),
 			SQS_ENDPOINT: sqs.env.SQS_ENDPOINT,
 			SQS_QUEUE_URL: sqs.queueUrl,
 			SQS_DLQ_URL: sqs.dlqUrl,

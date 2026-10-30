@@ -14,6 +14,7 @@ import { startPostgres, testOrm, command } from './support/postgres.js';
 import type { TestPostgres } from './support/postgres.js';
 import {
 	seedPending,
+	seedNeutralizedRollback,
 	pendingCommand,
 	pendingClaim,
 	resolvePending,
@@ -44,7 +45,7 @@ afterAll(async () => {
 }, 30000);
 
 test('migration up/status/down/up preserves preexisting pending and terminal financial history', async () => {
-	await orm.migrator.down();
+	await orm.migrator.down({ to: 'Migration202610290001' });
 	const w = await orm.em.execute<{ id: string; player_id: string }[]>(
 		"insert into wallets (player_id, currency, balance) values (?, 'BRL', 0.00) returning id, player_id",
 		[crypto.randomUUID()],
@@ -79,7 +80,7 @@ test('migration up/status/down/up preserves preexisting pending and terminal fin
 	).toContain('Migration202610290002');
 	await command([process.execPath, 'run', 'db:migrate'], postgres.env);
 	expect(await orm.migrator.getPending()).toHaveLength(0);
-	await orm.migrator.down();
+	await orm.migrator.down({ to: 'Migration202610290001' });
 	expect(
 		await orm.em.execute(
 			'select * from wager_transactions where id in (?, ?, ?) order by id',
@@ -524,20 +525,28 @@ test.each(['WIN', 'LOSS'] as const)(
 	},
 );
 
-test.each([
-	'wallet',
-	'ledger',
-	'wager',
-	'idempotency',
-	'outbox-first',
-	'outbox-second',
-	'after-finish',
-] as const)(
-	'PostgreSQL rollback is complete when resolution fails at %s',
-	async fault => {
-		const f = await seedPending(orm);
+test.each(
+	([false, true] as const).flatMap(neutralized =>
+		(
+			[
+				'wallet',
+				'ledger',
+				'wager',
+				'idempotency',
+				'outbox-first',
+				'outbox-second',
+				'after-finish',
+			] as const
+		).map(fault => ({ fault, neutralized })),
+	),
+)(
+	'PostgreSQL rollback is complete at $fault, neutralized refund=$neutralized',
+	async ({ fault, neutralized }) => {
+		const f = neutralized
+			? await seedNeutralizedRollback(orm)
+			: await seedPending(orm);
 		const uc = new ProcessWagerUseCase(createUnitOfWork(orm));
-		await uc.execute(f.original);
+		if (!neutralized) await uc.execute(f.original);
 		const claim = await pendingClaim(orm, f.id);
 		const before = await orm.em
 			.fork()
@@ -612,7 +621,7 @@ test.each([
 			);
 			await orm.em.execute('drop function pending_fault()');
 		}
-		await reconciled(orm, f.wallet.id, '20.00', 2);
+		await reconciled(orm, f.wallet.id, '20.00', neutralized ? 4 : 2);
 		expect(
 			await orm.em
 				.fork()
@@ -642,6 +651,6 @@ test.each([
 				86400000,
 			).execute(claim, 1000),
 		).toBe('PROCESSED');
-		await reconciled(orm, f.wallet.id, '100.00', 3);
+		await reconciled(orm, f.wallet.id, '100.00', neutralized ? 5 : 3);
 	},
 );

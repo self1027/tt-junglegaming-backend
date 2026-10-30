@@ -506,7 +506,7 @@ test.each([
 	},
 );
 
-test('SQL rollback of refund remains distinct; rejected reversal cannot enable a duplicate chain credit', async () => {
+test('SQL rollback of refund permits the unused direct modality and never resets same-kind uniqueness', async () => {
 	const wallet = await opened();
 	const bet = input(wallet);
 	await useCase.execute(bet);
@@ -529,8 +529,8 @@ test('SQL rollback of refund remains distinct; rejected reversal cannot enable a
 			}),
 		),
 	).toMatchObject({
-		status: 'REJECTED',
-		failureCode: 'CUMULATIVE_REVERSAL_NOT_ALLOWED',
+		status: 'PROCESSED',
+		balance: { amount: '100.00' },
 	});
 	expect(
 		await useCase.execute(
@@ -542,10 +542,10 @@ test('SQL rollback of refund remains distinct; rejected reversal cannot enable a
 	).toMatchObject({ status: 'REJECTED', failureCode: 'DUPLICATE_REVERSAL' });
 	await inspect(
 		wallet,
-		'90.00',
-		4,
-		['PROCESSED', 'PROCESSED', 'PROCESSED', 'REJECTED', 'REJECTED'],
-		4,
+		'100.00',
+		5,
+		['PROCESSED', 'PROCESSED', 'PROCESSED', 'PROCESSED', 'REJECTED'],
+		5,
 	);
 });
 

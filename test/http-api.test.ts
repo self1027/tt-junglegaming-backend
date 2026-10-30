@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { afterAll, beforeAll, expect, spyOn, test } from 'bun:test';
 import type { INestApplication } from '@nestjs/common';
 import { MikroORM } from '@mikro-orm/postgresql';
 import { createApi } from '../src/bootstrap/create-api.js';
@@ -21,7 +21,11 @@ beforeAll(async () => {
 	orm = await testOrm(postgres);
 	cleanup.push(() => orm.close(true));
 	await orm.migrator.up();
-	Object.assign(process.env, postgres.env);
+	process.env = Object.fromEntries(
+		Object.entries({ ...process.env, ...postgres.env }).filter(
+			([key]) => !key.startsWith('SQS_'),
+		),
+	);
 	app = await createApi();
 	cleanup.push(() => app.close());
 	app.useLogger(false);
@@ -86,6 +90,84 @@ function wager(
 		money: { amount, currency: 'BRL' },
 	};
 }
+
+test('HTTP emits correlated processing metrics after commit without money, player or keys', async () => {
+	const wallet = await open();
+	const body = wager(wallet);
+	const logs: string[] = [];
+	const log = spyOn(console, 'log').mockImplementation((value: unknown) => {
+		logs.push(String(value));
+	});
+	try {
+		const first = await request(
+			'/wagering/transactions',
+			body,
+			'metrics-key',
+		);
+		expect(first.status).toBe(200);
+		await request('/wagering/transactions', body, 'metrics-key');
+		await request('/wagering/transactions/', body, 'metrics-key');
+		await request('/Wagering/Transactions', body, 'metrics-key');
+		const records = logs
+			.map(value => JSON.parse(value) as Record<string, unknown>)
+			.filter(value => value.event === 'http_wager_completed');
+		expect(records).toHaveLength(4);
+		expect(records[0]).toMatchObject({
+			transactionId: first.body.transactionId,
+			correlationId: first.body.transactionId,
+			walletId: wallet.id,
+			providerId: 'provider-a',
+		});
+		expect(JSON.stringify(records[0]?.metrics)).toContain(
+			'wagering_results_total',
+		);
+		expect(JSON.stringify(records[1]?.metrics)).toContain(
+			'duplicates_total',
+		);
+		for (const forbidden of [
+			'100.00',
+			'25.00',
+			wallet.playerId,
+			'metrics-key',
+		])
+			expect(JSON.stringify(records)).not.toContain(forbidden);
+	} finally {
+		log.mockRestore();
+	}
+});
+
+test('HTTP invalid requests do not copy rejected identities into diagnostics', async () => {
+	const body = {
+		providerId: 'sensitive-provider',
+		walletId: 'sensitive-value-not-a-uuid',
+		transactionId: 'client-chosen-unconfirmed-id',
+		messageId: 'client-chosen-message',
+		correlationId: 'client-chosen-correlation',
+	};
+	const logs: string[] = [];
+	const log = spyOn(console, 'log').mockImplementation((value: unknown) => {
+		logs.push(String(value));
+	});
+	try {
+		for (const path of ['/wallets', '/wagering/transactions'])
+			expect(
+				(await request(path, body, 'invalid-request-key')).status,
+			).toBe(400);
+		const records = logs.map(
+			value => JSON.parse(value) as Record<string, unknown>,
+		);
+		expect(
+			records.filter(record => record.event === 'http_failure'),
+		).toHaveLength(2);
+		expect(
+			records.filter(record => record.event === 'http_wager_failed'),
+		).toHaveLength(1);
+		for (const value of Object.values(body))
+			expect(JSON.stringify(records)).not.toContain(value);
+	} finally {
+		log.mockRestore();
+	}
+});
 
 for (const amount of ['0.00', '100.00', '9007199254740993.01']) {
 	test(`HTTP opening ${amount} and reconciliation expose exact persisted history`, async () => {
@@ -491,18 +573,20 @@ for (const table of ['wager_transactions', 'wallet_ledger_entries']) {
 }
 
 test('HTTP classifies transient database errors and hides unrelated unique violations', async () => {
-	await withFault('wallets', 'true', '53300', async () => {
-		expect(
-			await request('/wallets', {
-				playerId: crypto.randomUUID(),
-				initialBalance: { amount: '0.00', currency: 'BRL' },
-			}),
-		).toEqual({
-			status: 503,
-			body: { statusCode: 503, code: 'SERVICE_UNAVAILABLE' },
+	for (const sqlstate of ['53300', '57014', '25P03', '25P04']) {
+		await withFault('wallets', 'true', sqlstate, async () => {
+			expect(
+				await request('/wallets', {
+					playerId: crypto.randomUUID(),
+					initialBalance: { amount: '0.00', currency: 'BRL' },
+				}),
+			).toEqual({
+				status: 503,
+				body: { statusCode: 503, code: 'SERVICE_UNAVAILABLE' },
+			});
+			expect((await request('/health/live')).status).toBe(200);
 		});
-		expect((await request('/health/live')).status).toBe(200);
-	});
+	}
 	await withFault('wallets', 'true', '23505', async () => {
 		expect(
 			(
@@ -625,7 +709,7 @@ test('HTTP reports both signed divergences without altering the disposable datab
 	expect(app.get(WalletReconciliationDiagnostics).divergences).toBe(2);
 });
 
-test('HTTP readiness remains 503 until SQS exists, while liveness stays open', async () => {
+test('HTTP fixture without SQS keeps readiness 503 while liveness stays open', async () => {
 	expect(await request('/health/ready')).toEqual({
 		status: 503,
 		body: {

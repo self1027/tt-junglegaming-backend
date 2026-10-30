@@ -619,6 +619,36 @@ describe('WagerTransaction references and reversals', () => {
 		},
 	);
 
+	test('a processed rollback of the refund permits the unused rollback modality on the BET', () => {
+		const wager = reversal('ROLLBACK');
+		const found = { ...reference({}, ['REFUND']), refundReversed: true };
+		expect(wager.processingDecision(found)).toMatchObject({
+			type: 'READY',
+			consequence: { direction: 'CREDIT' },
+		});
+		const effect = wager.markProcessed(later, found);
+		expect(effect.direction).toBe('CREDIT');
+		expect(wager.status).toBe('PROCESSED');
+	});
+
+	test('neutralizing a refund does not reset historical uniqueness or neutralize a rollback', () => {
+		const used = {
+			...reference({}, ['REFUND', 'ROLLBACK']),
+			refundReversed: true,
+		};
+		expect(() => reversal('ROLLBACK').processingDecision(used)).toThrow(
+			InvalidWagerReversalError,
+		);
+		const rollback = {
+			...reference({}, ['ROLLBACK']),
+			refundReversed: true,
+		};
+		expect(reversal('REFUND').processingDecision(rollback)).toEqual({
+			type: 'POLICY_REQUIRED',
+			policy: 'CROSS_TYPE_REVERSAL',
+		});
+	});
+
 	test('reference history must explicitly contain valid reversal kinds', () => {
 		const invalid = reference();
 		expect(() =>

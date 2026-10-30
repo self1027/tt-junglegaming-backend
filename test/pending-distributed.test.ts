@@ -4,6 +4,7 @@ import { startPostgres, testOrm } from './support/postgres.js';
 import type { TestPostgres } from './support/postgres.js';
 import {
 	seedPending,
+	seedNeutralizedRollback,
 	pendingCommand,
 	pendingUntil,
 	reconciled,
@@ -145,13 +146,84 @@ test('REFUND and ROLLBACK workers compete after BET; third process replays witho
 	await reconciled(orm, f.wallet.id, '100.00', 3);
 });
 
-test.each(['crash-before-commit', 'crash-after-commit'] as const)(
-	'%s: kill at a verified SQL boundary and recover in a third process',
-	async mode => {
-		const f = await seedPending(orm);
-		await new ProcessWagerUseCase(createUnitOfWork(orm)).execute(
-			f.original,
-		);
+test('two workers compete for the newly eligible modality while a third process replays it', async () => {
+	const f = await seedPending(orm, '100.00', 'ROLLBACK');
+	const uc = new ProcessWagerUseCase(createUnitOfWork(orm));
+	const other = pendingCommand(f.wallet, {
+		kind: 'ROLLBACK',
+		referenceExternalTransactionId: f.original.externalTransactionId,
+	});
+	const otherResult = await uc.execute(other);
+	expect(otherResult.status).toBe('PENDING_REFERENCE');
+	await uc.execute(f.original);
+	const refund = pendingCommand(f.wallet, {
+		kind: 'REFUND',
+		referenceExternalTransactionId: f.original.externalTransactionId,
+	});
+	await uc.execute(refund);
+	await uc.execute(
+		pendingCommand(f.wallet, {
+			kind: 'ROLLBACK',
+			referenceExternalTransactionId: refund.externalTransactionId,
+		}),
+	);
+	const a = child(f.pending, 'hold-commit');
+	const b = child(other);
+	const replay = wagerChild(postgres.env, f.pending);
+	children.push(replay);
+	for (const p of [a, b, replay]) expect(await p.next()).toBe('ready');
+	await a.signal();
+	expect(await a.next()).toBe('before-commit');
+	await b.signal();
+	await waiting(b.pid);
+	await replay.signal();
+	await pendingUntil(
+		async () =>
+			(
+				await orm.em.execute(
+					'select pid from pg_stat_activity where application_name = ? and wait_event_type = ?',
+					[`wager-test-${String(replay.pid)}`, 'Lock'],
+				)
+			).length === 1,
+		'replay waits for newly eligible resolution',
+	);
+	await a.signal();
+	expect(await a.next()).toBe('PROCESSED');
+	expect(await b.next()).toBe('REJECTED');
+	expect(await replay.next()).toBe('REPLAY');
+	expect(await uc.execute(other)).toMatchObject({
+		status: 'REJECTED',
+		failureCode: 'DUPLICATE_REVERSAL',
+		idempotentReplay: true,
+	});
+	await reconciled(orm, f.wallet.id, '100.00', 5);
+	expect(
+		await orm.em.fork().count(OutboxMessageRow, { correlationId: f.id }),
+	).toBe(3);
+	expect(
+		await orm.em.fork().count(OutboxMessageRow, {
+			correlationId: otherResult.transactionId,
+		}),
+	).toBe(2);
+});
+
+test.each(
+	([false, true] as const).flatMap(neutralized =>
+		(['crash-before-commit', 'crash-after-commit'] as const).map(mode => ({
+			mode,
+			neutralized,
+		})),
+	),
+)(
+	'$mode: recovery in three processes, neutralized refund=$neutralized',
+	async ({ mode, neutralized }) => {
+		const f = neutralized
+			? await seedNeutralizedRollback(orm)
+			: await seedPending(orm);
+		if (!neutralized)
+			await new ProcessWagerUseCase(createUnitOfWork(orm)).execute(
+				f.original,
+			);
 		const a = child(f.pending, mode, 10000);
 		const b = child(f.pending);
 		const c = child(f.pending);
@@ -163,7 +235,7 @@ test.each(['crash-before-commit', 'crash-after-commit'] as const)(
 				: 'committed-before-response',
 		);
 		if (mode === 'crash-before-commit') {
-			await reconciled(orm, f.wallet.id, '20.00', 2);
+			await reconciled(orm, f.wallet.id, '20.00', neutralized ? 4 : 2);
 			expect(
 				(
 					await orm.em.fork().findOneOrFail(IdempotencyRecordRow, {
@@ -176,7 +248,8 @@ test.each(['crash-before-commit', 'crash-after-commit'] as const)(
 					.fork()
 					.count(OutboxMessageRow, { correlationId: f.id }),
 			).toBe(1);
-		} else await reconciled(orm, f.wallet.id, '100.00', 3);
+		} else
+			await reconciled(orm, f.wallet.id, '100.00', neutralized ? 5 : 3);
 		await a.kill();
 		if (mode === 'crash-before-commit') {
 			await pendingUntil(
@@ -197,7 +270,7 @@ test.each(['crash-before-commit', 'crash-after-commit'] as const)(
 		);
 		await c.signal();
 		expect(await c.next()).toBe('EMPTY');
-		await reconciled(orm, f.wallet.id, '100.00', 3);
+		await reconciled(orm, f.wallet.id, '100.00', neutralized ? 5 : 3);
 		expect(
 			await orm.em
 				.fork()
@@ -206,6 +279,39 @@ test.each(['crash-before-commit', 'crash-after-commit'] as const)(
 	},
 	30000,
 );
+
+test('a worker waiting for refund neutralization rereads its commit while a third wallet progresses', async () => {
+	const f = await seedPending(orm, '100.00', 'ROLLBACK');
+	const uc = new ProcessWagerUseCase(createUnitOfWork(orm));
+	await uc.execute(f.original);
+	const refund = pendingCommand(f.wallet, {
+		kind: 'REFUND',
+		referenceExternalTransactionId: f.original.externalTransactionId,
+	});
+	await uc.execute(refund);
+	const undo = pendingCommand(f.wallet, {
+		kind: 'ROLLBACK',
+		referenceExternalTransactionId: refund.externalTransactionId,
+	});
+	const independent = await seedPending(orm);
+	const neutralizer = wagerChild(postgres.env, undo, 'hold-commit');
+	const worker = child(f.pending);
+	const other = wagerChild(postgres.env, independent.original);
+	children.push(neutralizer, other);
+	for (const p of [neutralizer, worker, other])
+		expect(await p.next()).toBe('ready');
+	await neutralizer.signal();
+	expect(await neutralizer.next()).toBe('before-commit');
+	await worker.signal();
+	await waiting(worker.pid);
+	await other.signal();
+	expect(await other.next()).toBe('PROCESSED');
+	await reconciled(orm, independent.wallet.id, '20.00', 2);
+	await neutralizer.signal();
+	expect(await neutralizer.next()).toBe('PROCESSED');
+	expect(await worker.next()).toBe('PROCESSED');
+	await reconciled(orm, f.wallet.id, '100.00', 5);
+});
 
 test('stale process cannot finalize after actual lease expiry and reacquisition by another process', async () => {
 	const f = await seedPending(orm);

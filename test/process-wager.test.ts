@@ -115,6 +115,22 @@ function fixture(): {
 								: [],
 						),
 				),
+			hasReversedRefund: betId =>
+				Promise.resolve(
+					[...transactions.values()].some(
+						refund =>
+							refund.kind === 'REFUND' &&
+							refund.status === 'PROCESSED' &&
+							refund.referenceTransactionId === betId &&
+							[...transactions.values()].some(
+								rollback =>
+									rollback.kind === 'ROLLBACK' &&
+									rollback.status === 'PROCESSED' &&
+									rollback.referenceTransactionId ===
+										refund.id,
+							),
+					),
+				),
 		},
 		idempotency: {
 			lockResult: () =>
@@ -278,7 +294,7 @@ test.each([
 	},
 );
 
-test('ROLLBACK of REFUND debits once, cumulative direct reversal and repeated modality are rejected', async () => {
+test('ROLLBACK of REFUND debits once and permits the unused direct modality without resetting uniqueness', async () => {
 	const f = fixture();
 	const bet = command();
 	await f.useCase.execute(bet);
@@ -311,11 +327,11 @@ test('ROLLBACK of REFUND debits once, cumulative direct reversal and repeated mo
 			}),
 		),
 	).toMatchObject({
-		status: 'REJECTED',
-		failureCode: 'CUMULATIVE_REVERSAL_NOT_ALLOWED',
+		status: 'PROCESSED',
+		balance: { amount: '100.00' },
 	});
-	expect(f.entries).toHaveLength(3);
-	expect(f.wallet.version).toBe(4);
+	expect(f.entries).toHaveLength(4);
+	expect(f.wallet.version).toBe(5);
 });
 
 test('BET insufficient funds and insufficient reversal use distinct stable codes', async () => {

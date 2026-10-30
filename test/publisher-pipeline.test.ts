@@ -57,10 +57,7 @@ test('HTTP and SQS consumer → committed Outbox → events FIFO; all four v1 fa
 			}),
 		}),
 	);
-	const consumer = await startConsumer({
-		...suite.sqs.env,
-		...suite.postgres.env,
-	});
+	const consumer = await startConsumer(suite.env);
 	children.push(consumer);
 	await until(
 		async () =>

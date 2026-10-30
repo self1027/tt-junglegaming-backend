@@ -21,13 +21,14 @@ import { OutboxMessageRow } from '../../src/platform/persistence/models.js';
 import { provisionEventsQueue } from '../../src/platform/messaging/provision-sqs.js';
 import { startPostgres, testOrm } from './postgres.js';
 import type { TestPostgres } from './postgres.js';
-import { startSqs } from './sqs.js';
+import { startSqs, sqsEnvironment } from './sqs.js';
 import type { TestSqs } from './sqs.js';
 import { startPublisher } from './publisher-child.js';
 import type { PublisherChild } from './publisher-child.js';
 import type { ConsumerChild } from './consumer-child.js';
 
 export interface PublisherSqsSuite {
+	readonly env: NodeJS.ProcessEnv;
 	readonly postgres: TestPostgres;
 	readonly sqs: TestSqs;
 	readonly orm: MikroORM;
@@ -81,10 +82,7 @@ export function publisherSqsSuite(): PublisherSqsSuite {
 		cleanup.push(() => orm.close(true));
 		await orm.migrator.up();
 		uow = createUnitOfWork(orm);
-		Object.assign(process.env, sqs.env, postgres.env, {
-			...sqs.env,
-			...postgres.env,
-		});
+		Object.assign(process.env, resourceEnvironment());
 		app = await createApi();
 		cleanup.push(() => app.close());
 		app.useLogger(false);
@@ -123,10 +121,14 @@ export function publisherSqsSuite(): PublisherSqsSuite {
 			throw new AggregateError(errors, 'Publisher integration cleanup');
 	}, 30000);
 
+	function resourceEnvironment(): NodeJS.ProcessEnv {
+		// Resource snapshots may carry the developer's other service settings.
+		return { ...postgres.env, ...sqsEnvironment(sqs) };
+	}
+
 	function environment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 		return {
-			...sqs.env,
-			...postgres.env,
+			...resourceEnvironment(),
 			SQS_EVENTS_QUEUE_URL: eventsUrl,
 			PUBLISHER_BATCH_SIZE: '1',
 			PUBLISHER_CONCURRENCY: '1',
@@ -263,6 +265,9 @@ export function publisherSqsSuite(): PublisherSqsSuite {
 	}
 
 	return {
+		get env(): NodeJS.ProcessEnv {
+			return resourceEnvironment();
+		},
 		get postgres(): TestPostgres {
 			return postgres;
 		},
