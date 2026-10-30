@@ -121,14 +121,11 @@ export class Observer {
 		return rows[0] ?? {};
 	}
 
-	async processing(provider: string): Promise<Record<string, unknown>> {
-		const rows = await this.sql<Record<string, unknown>[]>`
-		select count(*)::int as samples,
-		percentile_disc(0.50) within group (order by extract(epoch from (processed_at - created_at)) * 1000)::float8 as p50,
-		percentile_disc(0.95) within group (order by extract(epoch from (processed_at - created_at)) * 1000)::float8 as p95,
-		percentile_disc(0.99) within group (order by extract(epoch from (processed_at - created_at)) * 1000)::float8 as p99
-		from wager_transactions where provider_id = ${provider} and status = 'PROCESSED'`;
-		return rows[0] ?? {};
+	async confirmedIds(provider: string, ids: string[]): Promise<string[]> {
+		const rows = await this.sql<{ external_transaction_id: string }[]>`
+		select external_transaction_id from wager_transactions where provider_id = ${provider} and status = 'PROCESSED'
+		and external_transaction_id in (select value from jsonb_array_elements_text(${JSON.stringify(ids)}::text::jsonb))`;
+		return rows.map(row => row.external_transaction_id);
 	}
 
 	async reconcile(
@@ -147,7 +144,7 @@ export class Observer {
 			min(balance_after) as lowest, max(balance_before) filter (where direction = 'DEBIT') as highest,
 			count(distinct balance_before) filter (where direction = 'DEBIT')::int as starts,
 			count(*) filter (where balance_before < 0 or balance_after < 0 or
-				(direction = 'DEBIT' and (amount <> 1.00 or balance_before - amount <> balance_after)) or
+				(direction = 'DEBIT' and (amount <> 1.00 or balance_before - amount <> balance_after or mod(balance_before, 1) <> 0)) or
 				(direction = 'CREDIT' and (balance_before <> 0 or balance_after <> amount)))::int as bad
 			from wallet_ledger_entries l join selected s on s.id = l.wallet_id group by l.wallet_id
 		),

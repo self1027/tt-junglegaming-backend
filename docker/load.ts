@@ -1,6 +1,6 @@
 import { mkdir } from 'node:fs/promises';
 import { cpus, totalmem, freemem, platform, release } from 'node:os';
-import { configuration } from './load/core.js';
+import { configuration, forwardUntilStarted } from './load/core.js';
 
 async function capture(command: string[]): Promise<string> {
 	const child = Bun.spawn(command, { stdout: 'pipe', stderr: 'pipe' });
@@ -90,12 +90,23 @@ async function launch(): Promise<number> {
 		],
 		{ stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' },
 	);
+	let running = true;
+	let interrupted = false;
+	const wasInterrupted = (): boolean => interrupted;
+	let forwarding = Promise.resolve();
 	const forward = (signal: 'SIGINT' | 'SIGTERM'): void => {
-		const stop = Bun.spawn(['docker', 'kill', `--signal=${signal}`, name], {
-			stdout: 'ignore',
-			stderr: 'inherit',
-		});
-		void stop.exited;
+		if (interrupted) return;
+		interrupted = true;
+		forwarding = forwardUntilStarted(
+			async () => {
+				const stop = Bun.spawn(
+					['docker', 'kill', `--signal=${signal}`, name],
+					{ stdout: 'ignore', stderr: 'ignore' },
+				);
+				return (await stop.exited) === 0;
+			},
+			() => running,
+		);
 	};
 	const interrupt = (): void => {
 		forward('SIGINT');
@@ -106,8 +117,25 @@ async function launch(): Promise<number> {
 	process.on('SIGINT', interrupt);
 	process.on('SIGTERM', terminate);
 	try {
-		return await child.exited;
+		const code = await child.exited;
+		running = false;
+		await forwarding;
+		if (wasInterrupted()) {
+			await Bun.write(
+				`load-results/${name}-launcher.json`,
+				JSON.stringify({
+					status: 'INCOMPLETE',
+					reason: 'Launcher interrupted; inspect the driver partial report',
+					container: name,
+					metadata: JSON.parse(metadata) as unknown,
+				}),
+			);
+			console.error('Launcher interrupted: INCOMPLETE');
+			return 130;
+		}
+		return code;
 	} finally {
+		running = false;
 		process.off('SIGINT', interrupt);
 		process.off('SIGTERM', terminate);
 	}

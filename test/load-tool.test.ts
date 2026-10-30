@@ -10,6 +10,9 @@ import {
 	request,
 	produce,
 	installShutdown,
+	finalize,
+	brokerDrained,
+	forwardUntilStarted,
 } from '../docker/load/core.js';
 
 describe('load tool trust boundaries', () => {
@@ -19,6 +22,12 @@ describe('load tool trust boundaries', () => {
 			30000,
 		);
 		expect(configuration({ LOAD_CONCURRENCY: '3' }).concurrency).toBe(3);
+		expect(
+			configuration({
+				SQS_ENDPOINT: 'http://localhost:4566',
+				POSTGRES_HOST: '127.0.0.1',
+			}).profile,
+		).toBe('quick');
 		for (const env of [
 			{ LOAD_PROFILE: 'large' },
 			{ LOAD_CONCURRENCY: '0' },
@@ -122,6 +131,83 @@ describe('load tool trust boundaries', () => {
 });
 
 describe('load tool lifecycle', () => {
+	test('launcher retries signal delivery if the named container does not exist yet', async () => {
+		let attempts = 0;
+		await forwardUntilStarted(
+			() => Promise.resolve(++attempts === 3),
+			() => true,
+		);
+		expect(attempts).toBe(3);
+		await forwardUntilStarted(
+			() => {
+				throw new Error('must not send after exit');
+			},
+			() => false,
+		);
+	});
+	for (const stage of ['close', 'persist'] as const) {
+		test(`cancellation during ${stage} saves INCOMPLETE and never leaves PASS`, async () => {
+			const controller = new AbortController();
+			const report = {
+				status: 'PASS',
+				runId: 'late',
+				config: configuration({}),
+				metadata: {},
+				scenarios: [],
+				errors: [] as string[],
+			};
+			let persisted = '';
+			let firstSave = true;
+			await finalize(
+				report,
+				controller.signal,
+				async () => {
+					if (stage === 'close')
+						controller.abort(new Error('SIGTERM'));
+					await Promise.resolve();
+				},
+				async () => {
+					persisted = JSON.stringify(report);
+					if (stage === 'persist' && firstSave)
+						controller.abort(new Error('SIGINT'));
+					firstSave = false;
+					await Promise.resolve();
+				},
+			);
+			expect(report.status).toBe('INCOMPLETE');
+			expect(JSON.parse(persisted)).toMatchObject({
+				status: 'INCOMPLETE',
+			});
+		});
+	}
+
+	test('broker drain requires no pending commands, no DLQ growth and complete attributes', () => {
+		const depths = {
+			'commands.ApproximateNumberOfMessages': 0,
+			'commands.ApproximateNumberOfMessagesNotVisible': 0,
+			'commands.ApproximateNumberOfMessagesDelayed': 0,
+			'dlq.ApproximateNumberOfMessages': 0,
+			'dlq.ApproximateNumberOfMessagesNotVisible': 0,
+			'dlq.ApproximateNumberOfMessagesDelayed': 0,
+		};
+		expect(brokerDrained(depths, 0)).toBe(true);
+		expect(
+			brokerDrained(
+				{
+					...depths,
+					'commands.ApproximateNumberOfMessagesNotVisible': 1,
+				},
+				0,
+			),
+		).toBe(false);
+		expect(
+			brokerDrained(
+				{ ...depths, 'dlq.ApproximateNumberOfMessages': 1 },
+				0,
+			),
+		).toBe(false);
+		expect(brokerDrained({}, 0)).toBe(false);
+	});
 	test('worker failure stops scheduling and waits for other in-flight work', async () => {
 		let settled = false;
 		let calls = 0;

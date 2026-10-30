@@ -41,13 +41,21 @@ export function configuration(env: Record<string, string | undefined>): Config {
 		env.LOAD_TARGET === undefined || env.LOAD_TARGET === 'demo',
 		'LOAD_TARGET must be demo',
 	);
-	for (const [key, expected] of Object.entries({
-		API_BASE_URL: 'http://nginx:8080',
-		SQS_ENDPOINT: 'http://localstack:4566',
-		POSTGRES_HOST: 'postgres',
+	for (const [key, allowed] of Object.entries({
+		API_BASE_URL: [
+			'http://nginx:8080',
+			'http://localhost:3000',
+			'http://127.0.0.1:3000',
+		],
+		SQS_ENDPOINT: [
+			'http://localstack:4566',
+			'http://localhost:4566',
+			'http://127.0.0.1:4566',
+		],
+		POSTGRES_HOST: ['postgres', 'localhost', '127.0.0.1'],
 	})) {
 		assert(
-			env[key] === undefined || env[key] === expected,
+			env[key] === undefined || allowed.includes(env[key]),
 			`${key} must target the Compose demo`,
 		);
 	}
@@ -333,6 +341,77 @@ export interface Report {
 	scenarios: Record<string, unknown>[];
 	errors: string[];
 }
+
+export function brokerDrained(
+	depths: Record<string, number>,
+	baselineDlq: number,
+): boolean {
+	const keys = [
+		'ApproximateNumberOfMessages',
+		'ApproximateNumberOfMessagesNotVisible',
+		'ApproximateNumberOfMessagesDelayed',
+	];
+	const commands = keys.map(key => depths[`commands.${key}`]);
+	const dlq = keys.map(key => depths[`dlq.${key}`]);
+	return (
+		commands.every(value => value === 0) &&
+		dlq.every(
+			value =>
+				value !== undefined &&
+				Number.isSafeInteger(value) &&
+				value >= 0,
+		) &&
+		dlq.reduce<number>((sum, value) => sum + (value ?? 0), 0) ===
+			baselineDlq
+	);
+}
+
+export async function forwardUntilStarted(
+	sendSignal: () => Promise<boolean>,
+	running: () => boolean,
+): Promise<void> {
+	while (running()) {
+		if (await sendSignal()) return;
+		await Bun.sleep(100);
+	}
+}
+
+export async function finalize(
+	report: Report,
+	signal: AbortSignal,
+	close: () => Promise<void>,
+	persist: () => Promise<void>,
+): Promise<void> {
+	try {
+		await close();
+	} catch (error) {
+		report.errors.push(`Cleanup: ${String(error)}`);
+		report.status = 'INCOMPLETE';
+	}
+	const markInterrupted = (): void => {
+		if (signal.aborted) {
+			report.status = 'INCOMPLETE';
+			if (!report.errors.includes(String(signal.reason)))
+				report.errors.push(String(signal.reason));
+		}
+	};
+	markInterrupted();
+	await persist();
+	// A signal can arrive during file I/O after serialization of the first report.
+	if (signal.aborted) {
+		markInterrupted();
+		await persist();
+	}
+}
+
 export function renderReport(report: Report): string {
-	return `# Distributed Wagering Processor — Load Test\n\nRun: ${report.runId}\n\nRESULT: ${report.status}\n\n${report.scenarios.map(scenario => `## ${String(scenario.name)}\n\n\u0060\u0060\u0060json\n${JSON.stringify(scenario, null, 2)}\n\u0060\u0060\u0060`).join('\n\n')}\n\n## Parameters and metadata\n\n\u0060\u0060\u0060json\n${JSON.stringify({ config: report.config, metadata: report.metadata, errors: report.errors }, null, 2)}\n\u0060\u0060\u0060\n`;
+	const summaries = report.scenarios.map(scenario =>
+		Object.fromEntries(
+			Object.entries(scenario).filter(
+				([key]) =>
+					!['samples', 'observations', 'queueSamples'].includes(key),
+			),
+		),
+	);
+	return `# Distributed Wagering Processor — Load Test\n\nRun: ${report.runId}\n\nRESULT: ${report.status}\n\nRaw request and polling samples: adjacent JSON artifact.\n\n${summaries.map(scenario => `## ${String(scenario.name)}\n\n\u0060\u0060\u0060json\n${JSON.stringify(scenario, null, 2)}\n\u0060\u0060\u0060`).join('\n\n')}\n\n## Parameters and metadata\n\n\u0060\u0060\u0060json\n${JSON.stringify({ config: report.config, metadata: report.metadata, errors: report.errors }, null, 2)}\n\u0060\u0060\u0060\n`;
 }

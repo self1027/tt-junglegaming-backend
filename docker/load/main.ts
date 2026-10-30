@@ -26,6 +26,8 @@ import {
 	assertInvariant,
 	verdict,
 	renderReport,
+	finalize,
+	brokerDrained,
 } from './core.js';
 import type { Config, Observation, Report } from './core.js';
 import { Observer } from './observer.js';
@@ -112,7 +114,7 @@ async function metadata(): Promise<Record<string, unknown>> {
 			'HTTP sanitizes SQLSTATE. SQL conflict count is unavailable; database-wide deadlock deltas and sampled lock waiters are reported separately. Sampling can miss short waits and claims.',
 			'Inbox attempts counts committed participations, not rolled-back retries or ACKs. Outbox extra claims include recovery, not necessarily failed network sends.',
 			'SQS queue attributes are approximate and global, including events from earlier runs. SQL backlog is exact and scoped to the scenario provider.',
-			'Asynchronous processing interval is wager processed_at-created_at (application timestamps); excludes FIFO queue residence, SQL commit and ACK. It is not end-to-end SQS latency.',
+			'Asynchronous latency is monotonic send-start to first SQL observation of a committed PROCESSED transaction, sampled every 250ms in batches of at most 1000 pending IDs. It is an upper bound including observation delay and excludes ACK/publication. Application created_at and processed_at share the same timestamp and cannot measure execution latency.',
 			'Database observations add read load every 250ms. Benchmark and services share hardware. No isolated bottleneck attribution or continuous host CPU/I/O profiling.',
 			'Financial reconciliation uses SQL aggregates specialized for positive openings and unit BETs, including continuity, exact sums, per-operation effects and events. It does not change the application reconciliation endpoint.',
 		],
@@ -309,25 +311,35 @@ export async function main(): Promise<number> {
 		}
 		return depths;
 	};
+	let baselineDlq = 0;
 	const drain = async (
 		provider: string,
 		expected: number,
 		asynchronous: boolean,
-		onPoint?: (point: Point) => void,
+		onPoint?: (point: Point) => Promise<void>,
 	): Promise<{ point: Point; drainMs: number }> => {
 		const start = performance.now();
+		let emptyBrokerSamples = 0;
 		while (performance.now() - start < config.drainMs) {
 			checkSignal();
 			const point = await observer.point(provider);
-			onPoint?.(point);
+			await onPoint?.(point);
 			if (
 				point.confirmed === expected &&
 				point.transactions === expected &&
 				point.events === expected * 2 &&
 				point.published === expected * 2 &&
 				(!asynchronous || point.inboxProcessed === expected)
-			)
-				return { point, drainMs: performance.now() - start };
+			) {
+				if (!asynchronous)
+					return { point, drainMs: performance.now() - start };
+				const depths = await queueDepth();
+				emptyBrokerSamples = brokerDrained(depths, baselineDlq)
+					? emptyBrokerSamples + 1
+					: 0;
+				if (emptyBrokerSamples >= 2)
+					return { point, drainMs: performance.now() - start };
+			}
 			await pause(250, signal);
 		}
 		throw new Error(
@@ -417,6 +429,7 @@ export async function main(): Promise<number> {
 				wallets: walletCount,
 				phase: 'preparation',
 				reconciliation: 'NOT VERIFIED',
+				startedAt: new Date().toISOString(),
 			};
 			report.scenarios.push(scenario);
 			console.log(
@@ -435,6 +448,27 @@ export async function main(): Promise<number> {
 				elapsedMs: number;
 				depths: Record<string, number>;
 			}[] = [];
+			const pendingConfirmations = new Map<string, number>();
+			const confirmationLatencies: number[] = [];
+			const observeConfirmations = async (): Promise<void> => {
+				if (!asynchronous || pendingConfirmations.size === 0) return;
+				const ids = [...pendingConfirmations.keys()].slice(0, 1000);
+				const confirmed = await observer.confirmedIds(provider, ids);
+				const at = performance.now();
+				for (const id of confirmed) {
+					const submittedAt = pendingConfirmations.get(id);
+					assert(submittedAt !== undefined);
+					confirmationLatencies.push(at - submittedAt);
+					pendingConfirmations.delete(id);
+				}
+			};
+			if (asynchronous) {
+				const depths = await queueDepth();
+				scenario.queueBeforeWarmup = depths;
+				baselineDlq = Object.entries(depths)
+					.filter(([key]) => key.startsWith('dlq.'))
+					.reduce((sum, [, value]) => sum + value, 0);
+			}
 			const chooseWallet = (sequence: number, worker: number): Wallet => {
 				// Exclusive partitions avoid accidental financial lock contention in A.
 				const partition = wallets.filter(
@@ -535,6 +569,7 @@ export async function main(): Promise<number> {
 				await drain(`${provider}-later`, 1, false);
 			}
 			scenario.phase = 'measurement';
+			scenario.measurementStartedAt = new Date().toISOString();
 			const first = await observer.point(provider);
 			const start = performance.now();
 			points.push({ ...first, elapsedMs: 0 });
@@ -552,6 +587,7 @@ export async function main(): Promise<number> {
 							...(await observer.point(provider)),
 							elapsedMs: performance.now() - start,
 						});
+						await observeConfirmations();
 						if (
 							asynchronous &&
 							performance.now() -
@@ -586,6 +622,11 @@ export async function main(): Promise<number> {
 							idempotent ? 'replay' : String(sequence),
 						);
 						activeWalletIds.add(body.walletId);
+						if (asynchronous)
+							pendingConfirmations.set(
+								body.externalTransactionId,
+								performance.now(),
+							);
 						const response = await (asynchronous
 							? send(body)
 							: submit(body));
@@ -613,6 +654,8 @@ export async function main(): Promise<number> {
 					: new Error('Observation failed');
 			for (const sample of samples)
 				sample.elapsedMs -= phase.startedAt - phaseStart;
+			scenario.generationStoppedAt = new Date().toISOString();
+			await observeConfirmations();
 			const atStop = await observer.point(provider);
 			const observationWindowMs = performance.now() - start;
 			points.push({ ...atStop, elapsedMs: observationWindowMs });
@@ -675,16 +718,28 @@ export async function main(): Promise<number> {
 				);
 			checkSignal();
 			const uniqueExpected = idempotent ? 1 : samples.length;
+			const drainStart = performance.now();
 			const drained = await drain(
 				provider,
 				uniqueExpected,
 				asynchronous,
-				point =>
+				async point => {
 					points.push({
 						...point,
 						elapsedMs: performance.now() - start,
-					}),
+					});
+					await observeConfirmations();
+				},
 			);
+			while (pendingConfirmations.size > 0) {
+				const before = pendingConfirmations.size;
+				await observeConfirmations();
+				assert(
+					pendingConfirmations.size < before,
+					'Unable to observe all SQS financial confirmations',
+				);
+			}
+			drained.drainMs = performance.now() - drainStart;
 			const last = drained.point;
 			Object.assign(scenario, {
 				drainMs: drained.drainMs,
@@ -728,7 +783,14 @@ export async function main(): Promise<number> {
 					for (const [key, value] of Object.entries(item.depths))
 						peak[key] = Math.max(peak[key] ?? 0, value);
 				Object.assign(scenario, {
-					asyncProcessingMs: await observer.processing(provider),
+					financialConfirmationObservedMs: percentiles(
+						confirmationLatencies,
+					),
+					asyncProcessingMs: null,
+					asyncProcessingReason:
+						'Application timestamps share the same value; execution interval unavailable.',
+					brokerDrain:
+						'Two consecutive approximate empty-command samples, 250ms apart; DLQ count unchanged from baseline. Requires exclusive demo workload.',
 					observationWindowMs,
 					confirmedAtGenerationStop: atStop.confirmed,
 					publishedAtGenerationStop: atStop.published,
@@ -760,6 +822,7 @@ export async function main(): Promise<number> {
 			scenario.financial = rows;
 			scenario.reconciliation = 'PASS';
 			scenario.phase = 'complete';
+			scenario.finishedAt = new Date().toISOString();
 			reconciled++;
 			console.log(
 				`Requests: ${String(samples.length)}; completed: ${String(completed.length)}; throughput: ${Number(scenario.throughputOpsPerSecond).toFixed(2)} ${asynchronous ? 'SQS sends' : 'HTTP ops'}/s\nLatency ms: ${JSON.stringify(asynchronous ? scenario.sqsSendLatencyMs : scenario.httpLatencyMs)}\nTechnical error rate: ${((technicalErrors * 100) / Math.max(samples.length, 1)).toFixed(2)}%; business rejections: ${String(counts.business ?? 0)}\nOutbox publication interval ms: ${JSON.stringify(scenario.publicationLagMs)}\nDrain: ${drained.drainMs.toFixed(2)} ms; pending: ${String(last.pending)}\nReconciliation: PASS`,
@@ -790,20 +853,17 @@ export async function main(): Promise<number> {
 				: 'FAIL';
 		console.error(String(error));
 	} finally {
-		if (signal.aborted) {
-			report.status = 'INCOMPLETE';
-			report.errors.push(String(signal.reason));
-		}
 		sqs.destroy();
-		try {
-			await observer.sql.close({ timeout: 5 });
-		} catch (error) {
-			report.errors.push(`SQL cleanup: ${String(error)}`);
-			report.status = 'INCOMPLETE';
-		}
+		await finalize(
+			report,
+			signal,
+			async () => {
+				await observer.sql.close({ timeout: 5 });
+				report.metadata.finishedAt = new Date().toISOString();
+			},
+			save,
+		);
 		cleanup();
-		report.metadata.finishedAt = new Date().toISOString();
-		await save();
 		console.log(
 			`\nRESULT: ${report.status}\nReports: load-results/${runId}.{json,md}`,
 		);

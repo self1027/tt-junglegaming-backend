@@ -139,3 +139,72 @@ test('real effects require published facts; a stored balance divergence fails cr
 	}
 	expect(divergence).toBe(true);
 });
+
+test('SQL reconciliation rejects fractional disconnected chains even when sums, extrema and identities match', async () => {
+	const wallet = await createUnitOfWork(orm).execute(context =>
+		openWallet(context, '20.00'),
+	);
+	const ids: string[] = [];
+	for (let i = 0; i < 3; i++) {
+		const result = await createProcessWagerUseCase(orm).execute({
+			providerId: 'chain-fixture',
+			externalTransactionId: crypto.randomUUID(),
+			idempotencyKey: crypto.randomUUID(),
+			playerId: wallet.playerId,
+			walletId: wallet.id,
+			roundId: 'r',
+			gameId: 'g',
+			kind: 'BET',
+			amount: { amount: '1.00', currency: 'BRL' },
+		});
+		ids.push(result.transactionId);
+	}
+	await orm.em.execute(
+		"update outbox_messages set status = 'PUBLISHED', published_at = clock_timestamp() where correlation_id in (?, ?, ?)",
+		ids,
+	);
+	// Copies model corrupt storage without disabling any production-table protection.
+	await orm.em.execute('create schema load_fixture');
+	for (const table of [
+		'wallets',
+		'wager_transactions',
+		'wallet_ledger_entries',
+		'idempotency_records',
+		'outbox_messages',
+	]) {
+		await orm.em.execute(
+			`create table load_fixture.${table} as table public.${table}`,
+		);
+	}
+	await orm.em.execute(
+		'update load_fixture.wallet_ledger_entries set balance_before = 18.50, balance_after = 17.50 where transaction_id = ?',
+		[ids[1]],
+	);
+	await orm.em.execute(
+		`update load_fixture.idempotency_records set original_result = jsonb_set(original_result, '{balance,amount}', '"17.50"') where transaction_id = ?`,
+		[ids[1]],
+	);
+	const fixture = new Observer(
+		new SQL({
+			hostname: postgres.env.POSTGRES_HOST,
+			port: Number(postgres.env.POSTGRES_PORT),
+			database: postgres.env.POSTGRES_DB,
+			username: postgres.env.POSTGRES_USER,
+			password: postgres.env.POSTGRES_PASSWORD,
+			max: 1,
+			connection: {
+				default_transaction_read_only: 'on',
+				search_path: 'load_fixture,public',
+			},
+		}),
+	);
+	let rejected = false;
+	try {
+		await fixture.reconcile([wallet.id], '20.00');
+	} catch (error) {
+		rejected = String(error).includes('CRITICAL');
+	} finally {
+		await fixture.sql.close();
+	}
+	expect(rejected).toBe(true);
+});
