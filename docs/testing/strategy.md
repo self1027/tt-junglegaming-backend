@@ -85,21 +85,32 @@ separadamente; não exigem dependência de renderização.
 
 ## Demonstração e CI
 
-O [workflow](../../.github/workflows/ci.yml) tem jobs independentes: quality
-executa formatação/types/lint/build; integration executa a suíte completa com
-os harnesses reais; docker-smoke sobe o [Compose independente](../../compose.demo.yaml),
-executa o smoke duas vezes, reinicia os processos e repete a verificação.
-Também exige falha do smoke quando a API está inacessível. Integração recebe
-30 minutos, incluindo setup/downloads, sem alterar timeouts internos dos testes.
-Logs são guardados como artifacts e recursos descartáveis são removidos em always.
-Resultado remoto deve ser conferido na execução do commit correspondente.
+O [workflow](../../.github/workflows/ci.yml) divide a validação em três jobs.
+Quality executa formatação, typecheck, lint e build. Integration roda a suíte
+completa com os harnesses reais. Docker-smoke sobe o
+[Compose independente](../../compose.demo.yaml), executa dois smokes e compara
+os IDs dos nove containers para detectar recriações. Depois repete o startup,
+reinicia os processos e roda o smoke novamente.
+
+O job Docker também verifica atendimento por duas APIs e recriação da terceira
+com outro IP, mantendo o mesmo Nginx. Com o proxy parado, o smoke precisa falhar.
+Com todas as APIs paradas, readiness deve retornar 503 e liveness, 200. O job
+roda o smoke completo após recriar a API e após recuperar o conjunto de APIs.
+
+O job de integração tem 30 minutos para setup, downloads e testes, mantendo os
+timeouts internos da suíte. O workflow guarda logs como artifacts e remove os
+recursos descartáveis em always. Confira o resultado remoto na execução do commit
+correspondente.
 
 O [smoke](../../docker/smoke.ts) usa HTTP/SQS e SQL somente leitura para conferir
-os registros persistidos. Demonstra 100/80/80, replay histórico/conflito,
-duplicata entregue pela Inbox, publicação efetiva de dez eventos da Outbox e
-resolução de REFUND fora de ordem. É uma demonstração curta com uma API; a prova
-de múltiplas instâncias continua nas suítes distribuídas. Comandos, isolamento
-de identidades e consumo dos eventos próprios estão no [quickstart](../quickstart.md).
+os registros persistidos. Verifica a disputa 100/80/80 em backends distintos e
+50 replays concorrentes com o saldo histórico. Também confere conflito de payload,
+duplicata entregue pela Inbox, dez eventos publicados a partir da Outbox e
+resolução de REFUND fora de ordem. Todo HTTP passa pelo Nginx. Os endereços
+resolvidos por DNS e o header `X-Demo-Upstream` identificam as três APIs nas respostas.
+As suítes distribuídas cobrem crash entre commit e ACK e fencing. O
+[quickstart](../quickstart.md) traz os comandos e explica o isolamento das
+identidades e o consumo dos eventos do próprio cenário.
 
 ## Alcance da evidência
 

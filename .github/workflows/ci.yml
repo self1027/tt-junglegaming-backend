@@ -72,23 +72,62 @@ jobs:
               run: docker compose -f compose.demo.yaml up -d --build --wait --wait-timeout 180
             - name: Smoke twice with unique identities
               run: |
-                  docker compose -f compose.demo.yaml ps -q api consumer publisher pending-worker | sort > demo-containers-before.txt
+                  docker compose -f compose.demo.yaml ps -q nginx api-1 api-2 api-3 consumer-1 consumer-2 publisher-1 publisher-2 pending-worker | sort > demo-containers-before.txt
+                  test "$(wc -l < demo-containers-before.txt)" -eq 9
                   docker compose -f compose.demo.yaml run --rm smoke
                   docker compose -f compose.demo.yaml run --rm smoke
-                  docker compose -f compose.demo.yaml ps -q api consumer publisher pending-worker | sort > demo-containers-after.txt
+                  docker compose -f compose.demo.yaml ps -q nginx api-1 api-2 api-3 consumer-1 consumer-2 publisher-1 publisher-2 pending-worker | sort > demo-containers-after.txt
                   diff -u demo-containers-before.txt demo-containers-after.txt
             - name: Repeated startup and graceful restart
               run: |
                   docker compose -f compose.demo.yaml up -d --wait --wait-timeout 180
-                  docker compose -f compose.demo.yaml restart api consumer publisher pending-worker
+                  docker compose -f compose.demo.yaml restart nginx api-1 api-2 api-3 consumer-1 consumer-2 publisher-1 publisher-2 pending-worker
                   docker compose -f compose.demo.yaml up -d --wait --wait-timeout 180
                   docker compose -f compose.demo.yaml run --rm smoke
-            - name: Smoke must fail against an unavailable API
+            - name: Serve with two APIs and rediscover a recreated backend
               run: |
-                  if docker compose -f compose.demo.yaml run --rm --no-deps -e API_BASE_URL=http://api:1 smoke; then
-                    echo 'Smoke incorrectly accepted an unavailable API'
+                  nginx_id=$(docker compose -f compose.demo.yaml ps -q nginx)
+                  old_api_id=$(docker compose -f compose.demo.yaml ps -q api-3)
+                  old_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$old_api_id")
+                  docker compose -f compose.demo.yaml stop api-3
+                  for i in {1..12}; do
+                    curl --fail --silent --show-error --max-time 5 --dump-header - http://127.0.0.1:3000/health/ready -o /dev/null
+                  done > demo-degraded-headers.log
+                  for service in api-1 api-2; do
+                    id=$(docker compose -f compose.demo.yaml ps -q "$service")
+                    ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$id")
+                    grep -Fq "$ip:3000" demo-degraded-headers.log
+                  done
+                  wallet=$(curl --fail --silent --show-error --max-time 5 http://127.0.0.1:3000/wallets -H 'Content-Type: application/json' --data "{\"playerId\":\"degraded-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}\",\"initialBalance\":{\"amount\":\"100.00\",\"currency\":\"BRL\"}}")
+                  echo "$wallet" | jq -e '.balance == {amount: "100.00", currency: "BRL"}'
+                  wallet_id=$(echo "$wallet" | jq -r '.id')
+                  curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:3000/wallets/$wallet_id" | jq -e '.balance == {amount: "100.00", currency: "BRL"}'
+                  # Allocate another endpoint, then require recreation to change the API address.
+                  docker compose -f compose.demo.yaml rm -f api-3
+                  trap 'docker rm -f dwp-demo-old-api-address || true' EXIT
+                  docker run -d --rm --name dwp-demo-old-api-address --network dwp-demo_default --entrypoint sleep nginxinc/nginx-unprivileged:1.30.6-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03 180
+                  docker compose -f compose.demo.yaml up -d --no-deps --force-recreate --wait --wait-timeout 180 api-3
+                  test "$old_api_id" != "$(docker compose -f compose.demo.yaml ps -q api-3)"
+                  new_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(docker compose -f compose.demo.yaml ps -q api-3)")
+                  test "$old_ip" != "$new_ip"
+                  echo "api-3 address changed: $old_ip -> $new_ip"
+                  test "$nginx_id" = "$(docker compose -f compose.demo.yaml ps -q nginx)"
+                  docker compose -f compose.demo.yaml run --rm smoke
+            - name: Smoke must fail with Nginx stopped
+              run: |
+                  docker compose -f compose.demo.yaml stop nginx
+                  if docker compose -f compose.demo.yaml run --rm smoke; then
+                    echo 'Smoke incorrectly accepted an unavailable Nginx'
                     exit 1
                   fi
+                  docker compose -f compose.demo.yaml up -d --no-deps --wait --wait-timeout 180 nginx
+            - name: No APIs returns 503 while Nginx stays live
+              run: |
+                  docker compose -f compose.demo.yaml stop api-1 api-2 api-3
+                  test "$(curl --silent --show-error --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/health/ready)" = 503
+                  curl --fail --silent --show-error --max-time 5 http://127.0.0.1:3000/health/live
+                  docker compose -f compose.demo.yaml up -d --no-deps --wait --wait-timeout 180 api-1 api-2 api-3
+                  docker compose -f compose.demo.yaml run --rm smoke
             - name: Collect diagnostics
               if: always()
               run: |
@@ -106,4 +145,5 @@ jobs:
                       demo-status.log
                       demo-containers-before.txt
                       demo-containers-after.txt
+                      demo-degraded-headers.log
                   retention-days: 7
