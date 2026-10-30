@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import type { MikroORM } from '@mikro-orm/postgresql';
+import type { InferEntity } from '@mikro-orm/core';
 import { createUnitOfWork } from '../src/bootstrap/persistence.js';
 import { createProcessWagerUseCase } from '../src/bootstrap/wagering.js';
 import {
@@ -66,6 +67,26 @@ async function opened(): Promise<Wallet> {
 	return uow.execute(context => openWallet(context));
 }
 
+async function walletOutbox(
+	walletId: string,
+): Promise<InferEntity<typeof OutboxMessageRow>[]> {
+	// JSON criteria use raw Symbol fragments that Bun/MikroORM can lose during GC.
+	const ids = await orm.em.execute<{ id: string }[]>(
+		"select id from outbox_messages where payload->'data'->>'walletId' = ?",
+		[walletId],
+	);
+	const rows = await orm.em
+		.fork()
+		.find(
+			OutboxMessageRow,
+			{ id: { $in: ids.map(row => row.id) } },
+			{ orderBy: { eventId: 'asc' } },
+		);
+	for (const row of rows)
+		expect(row.payload).toMatchObject({ data: { walletId } });
+	return rows;
+}
+
 async function inspect(
 	wallet: Wallet,
 	balance: string,
@@ -106,9 +127,7 @@ async function inspect(
 			transactionId: record.transactionId,
 		});
 	}
-	const rows = await orm.em.fork().find(OutboxMessageRow, {
-		payload: { data: { walletId: wallet.id } },
-	});
+	const rows = await walletOutbox(wallet.id);
 	const entries = await orm.em.fork().find(WalletLedgerEntryRow, {
 		walletId: wallet.id,
 		transactionId: { $in: transactions.map(t => t.id) },
@@ -938,9 +957,7 @@ test.each(['crash-before-commit', 'crash-after-commit'] as const)(
 					? 'before-commit'
 					: 'committed-before-response',
 			);
-			const committedEvents = await orm.em.fork().find(OutboxMessageRow, {
-				payload: { data: { walletId: wallet.id } },
-			});
+			const committedEvents = await walletOutbox(wallet.id);
 			expect(committedEvents).toHaveLength(
 				mode === 'crash-before-commit' ? 0 : 2,
 			);
@@ -988,11 +1005,7 @@ test.each(['crash-before-commit', 'crash-after-commit'] as const)(
 			);
 			await inspect(wallet, '90.00', 2, ['PROCESSED'], 2);
 			if (mode === 'crash-after-commit')
-				expect(
-					await orm.em.fork().find(OutboxMessageRow, {
-						payload: { data: { walletId: wallet.id } },
-					}),
-				).toEqual(committedEvents);
+				expect(await walletOutbox(wallet.id)).toEqual(committedEvents);
 			expect(await useCase.execute(command)).toMatchObject({
 				status: 'PROCESSED',
 				idempotentReplay: true,

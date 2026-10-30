@@ -20,8 +20,11 @@ Bun 1.4.4, Docker 29.8.1 e Compose v5.5.1. Origem `7448fd4` na branch
 
 Humanizer foi instalado a partir de
 [blader/humanizer](https://github.com/blader/humanizer) e aplicado à prosa.
-Nenhum arquivo em `src/`, teste existente, migration, contrato HTTP/SQS/eventos,
-enunciado ou matriz de requisitos foi alterado. `compose.yaml`, `.env.example`,
+Nenhum arquivo em `src/`, migration, contrato HTTP/SQS/eventos, enunciado ou matriz
+de requisitos foi alterado. Nenhum teste foi removido, ignorado ou enfraquecido.
+A consulta de auditoria em `test/process-wager-persistence.test.ts` foi corrigida
+conforme diagnóstico abaixo, com as assertions financeiras preservadas.
+`compose.yaml`, `.env.example`,
 `package.json` e lockfile também foram preservados. A branch mantém todos os
 commits anteriores; não houve rebase, substituição do histórico ou merge.
 
@@ -34,7 +37,7 @@ commits anteriores; não houve rebase, substituição do histórico ou merge.
 | `bun run typecheck`                                                         | Exit 0.                                                                                                                                                 |
 | `bun run lint`                                                              | Exit 0; arquitetura sem violações, 109 módulos/391 dependências.                                                                                        |
 | `bun run build`                                                             | Exit 0.                                                                                                                                                 |
-| `bun run test`                                                              | Exit 0: **487 pass, 0 fail, 4.768 expect**, 38 arquivos, **466,70 s**.                                                                                  |
+| `bun run test` (primeira execução local)                                    | Exit 0: **487 pass, 0 fail, 4.768 expect**, 38 arquivos, **466,70 s**.                                                                                  |
 | `bun test test/documentation.test.ts`                                       | Exit 0: 4 testes, links/âncoras/frontmatter/comandos/contratos válidos.                                                                                 |
 | `docker compose -f compose.demo.yaml up -d --build --wait`                  | Exit 0; seis serviços contínuos saudáveis e dois jobs terminados com zero.                                                                              |
 | `docker compose -f compose.demo.yaml run --rm smoke`                        | Exit 0 em execuções consecutivas e depois de reiniciar os processos.                                                                                    |
@@ -68,6 +71,40 @@ recebidos, comparados integralmente aos envelopes Outbox persistidos/PUBLISHED.
   readiness. Nenhum timeout interno, assertion existente ou regra financeira mudou.
 
 ## Revisão e navegação
+
+O primeiro job de integração Linux terminou com 486 testes aprovados e uma falha:
+o teste de crash antes do commit esperava zero eventos da wallet e recebeu 99
+eventos anteriores. Um reproducer de compilação de consultas, sem banco, encontrou
+perdas intermitentes do predicado JSON no conjunto Bun 1.4.4/MikroORM 7.2.5.
+MikroORM representa essas expressões com Symbols registrados em WeakMap; a
+investigação independente também reproduziu perda de registros WeakMap/Symbol
+fora do ORM. A identidade da wallet não apareceu no log remoto, portanto esse
+vínculo específico é uma explicação sustentada pela reprodução, sem traçar uma
+query remota individual.
+
+O harness passou a obter IDs por SQL parametrizado e carregar as entidades por
+IDs escalares. Preserva todos os campos e as expectativas zero/dois antes/depois
+do commit; acrescenta uma assertion da wallet em cada payload retornado. Não usa
+mocks para a integração e não altera Money, transações, locks ou adaptadores de
+produção. O resultado da regressão posterior está nos checks do commit e na
+descrição do PR.
+
+O primeiro smoke no runner Linux revelou uma diferença do Compose v2: vários
+serviços com build para a mesma tag geravam labels de imagem diferentes, e
+`run smoke` recriava os workers. Reproduzido com Compose v2.40.3, embora o
+Compose v5.5.1 local não mostrasse esse comportamento. O runtime passou a ser
+construído somente pelo serviço API; os demais serviços reutilizam sua imagem.
+O CI compara os IDs dos containers antes/depois dos dois smokes para impedir
+regressão de ciclo de vida.
+
+Os logs também sustentam a hipótese de um long poll antigo receber o WIN depois
+do encerramento do consumer, deixando a mensagem invisível por 60 segundos,
+além do prazo de 45 segundos do smoke. Não identificam diretamente o destinatário
+daquele receive. A correção elimina a recriação involuntária, sem ampliar prazos,
+alterar URLs compatíveis ou modificar processamento financeiro.
+Reinícios explícitos também podem deixar requests antigos no emulador; a demo
+limita seu long polling a 1 segundo. Visibilidade de 60 segundos, prazo de 45
+segundos do smoke e configurações gerais de produção permanecem iguais.
 
 Revisão adversarial independente não encontrou bloqueios no Compose, scripts,
 CI ou documentação. A configuração adicional de logger também foi revisada e
