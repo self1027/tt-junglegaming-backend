@@ -140,7 +140,7 @@ do ledger; privilégios que alterem schema podem remover proteções.
 
 SQS não garante ordem de commit dos eventos publicados. Duplicatas após aceite e
 antes de PUBLISHED são possíveis, inclusive além da janela FIFO. Não há consumer
-downstream entregue, autenticação, double-entry, carga ou OpenTelemetry/dashboard.
+downstream entregue, autenticação, double-entry ou OpenTelemetry/dashboard.
 FAILED existe no domínio/schema; erros técnicos genéricos não viram FAILED
 automaticamente. Métricas JSON não são um ledger durável nem um backend agregado.
 

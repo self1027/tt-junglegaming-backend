@@ -19,23 +19,23 @@ existente não será recriada. Identidades novas preservam o histórico.
 
 ## Entregas e aceitação
 
-- [ ] `docker/load/core.ts`: parâmetros validados, percentis nearest-rank,
+- [x] `docker/load/core.ts`: parâmetros validados, percentis nearest-rank,
       throughput por conclusões dentro da janela, classificação e lifecycle.
       `test/load-tool.test.ts`: limites, respostas, percentis, timeout, sinais,
       backpressure, relatórios e recusa de PASS sem reconciliação.
-- [ ] `docker/load/observer.ts`: SQL read-only, snapshots de backlog, waits,
+- [x] `docker/load/observer.ts`: SQL read-only, snapshots de backlog, waits,
       deadlocks globais, processamento/Outbox e verificações agregadas de saldo,
       ledger, versões, idempotência e dois fatos por BET confirmada.
-- [ ] `docker/load/main.ts`: preparação, warm-up isolado, medição HTTP de wallets
+- [x] `docker/load/main.ts`: preparação, warm-up isolado, medição HTTP de wallets
       independentes/hot wallet, comparação hot com metade da concorrência, corrida
       idempotente e replays históricos, SQS limitado por taxa, drenagem e relatório
       JSON/Markdown em `load-results/` ignorado. Metadados e limitações explícitos.
-- [ ] `docker/load.ts`, package.json e Compose: entradas equivalentes, serviço
+- [x] `docker/load.ts`, package.json e Compose: entradas equivalentes, serviço
       tools com depends_on vazio, mounts apenas da ferramenta e resultados.
-- [ ] Executar Quick, Standard se viável, smoke e regressão completa. Registrar
+- [x] Executar Quick, Standard se viável, smoke e regressão completa. Registrar
       comandos, resultados e limitações reais em `docs/testing/load-test.md`;
       atualizar README, estratégia, índice, quickstart e matriz. Aplicar Humanizer.
-- [ ] Formatação, typecheck, lint/build, documentação, atualização Graphify,
+- [x] Formatação, typecheck, lint/build, documentação, atualização Graphify,
       revisão independente e commits semânticos.
 
 ## Pontos de revisão
@@ -59,3 +59,16 @@ existente não será recriada. Identidades novas preservam o histórico.
   no cenário independente. UUIDs novos isolam execuções.
 - SQLSTATE de erros HTTP não é exposto. Relatar indisponibilidade dessa métrica,
   deadlocks globais e amostras de espera; não interpretar espera como erro.
+
+## Evidências finais
+
+- Código em `59ed3ca` e correções da revisão em `f4a54d7`, sem alteração financeira.
+- Revisão independente aprovou as correções de continuidade do ledger, drenagem
+  SQS/DLQ, confirmação monotônica e sinais durante startup/cleanup/persistência.
+- 20 testes da ferramenta aprovados; regressão completa: 507/507, em 463.40 s.
+- Quick Docker e Standard pelo launcher: PASS; resultados em
+  [load-test.md](../../testing/load-test.md). Smoke original: PASS na mesma stack.
+- SIGINT/SIGTERM reais: exit 1 e INCOMPLETE após observar BETs persistidas.
+- Formatação, typecheck, lint com arquitetura, build, links e Compose aprovados.
+- Os 11 IDs dos containers foram preservados. Graphify atualizado; `src/` e
+  `docs/challenge.md` sem diff. Branch mantida para revisão, sem push ou merge.

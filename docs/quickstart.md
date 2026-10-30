@@ -65,6 +65,19 @@ Polling tem prazo de 45 segundos por etapa, com timeouts de rede e SQL. Erros
 saem com código não zero e indicam o check. Logs dos serviços ajudam a localizar
 a falha; o sucesso de SendMessage sozinho não conta como processamento.
 
+## Carga opcional
+
+Depois do smoke, execute `docker compose -f compose.demo.yaml run --rm load`.
+O perfil Quick usa concorrência moderada e para ao atingir a duração ou o teto
+de operações. Para uma amostra maior, execute
+`docker compose -f compose.demo.yaml run --rm -e LOAD_PROFILE=standard load`.
+Os relatórios ficam em `load-results/`, no host. Com Bun instalado,
+`bun run test:load` usa o mesmo serviço e coleta também os metadados do host.
+
+Execute somente uma carga ou smoke por vez. O serviço `load` não inicia com
+`up`, não recria a stack e preserva o histórico. Parâmetros, interpretação e
+limitações estão no [guia de carga](testing/load-test.md).
+
 ## Health e logs
 
 ```sh

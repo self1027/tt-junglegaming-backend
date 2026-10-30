@@ -31,13 +31,15 @@ anunciar uma garantia não verificada. Primeira execução pode baixar imagens.
 | Referências/TTL/fencing                   | `bun test test/pending-worker.test.ts test/pending-persistence.test.ts test/pending-distributed.test.ts test/pending-pipeline.test.ts` |
 | Docker e sinais reais                     | `bun test test/consumer-docker.test.ts test/publisher-docker.test.ts test/pending-docker.test.ts`                                      |
 | Observabilidade e documentos              | `bun test test/observability.test.ts test/documentation.test.ts`                                                                       |
+| Ferramenta de carga e observador SQL      | `bun test test/load-tool.test.ts test/load-observer.test.ts`                                                                           |
 
 Todos integram bun run test. O teste de exemplos executa o trecho curl em Bash
 (Git Bash instalado pelo Git no Windows) e comandos awslocal no LocalStack,
 substituindo somente endereços/identidades/arquivo temporário do ambiente descartável.
-O build Docker faz parte das suítes Docker; não há
-script separado fictício de integração/carga. Não existe test:load. Teste de
-carga, se desenvolvido depois, precisa registrar ambiente e metodologia.
+O build Docker faz parte das suítes Docker. O benchmark opcional
+`bun run test:load` reutiliza a demo já iniciada e tem
+[metodologia e resultados próprios](load-test.md). Ele não integra `bun run test`
+nem os jobs obrigatórios do CI. Os testes da ferramenta integram a suíte normal.
 
 Para RE-03, `bun test test/re03-conformance.test.ts test/wagering-persistence.test.ts`
 exercita compensação ativa, neutralização, duplicidade por modalidade, precisão e
@@ -116,7 +118,9 @@ identidades e o consumo dos eventos do próprio cenário.
 
 Mocks unitários cobrem decisões isoladas; só containers/processos reais sustentam
 as afirmações de concorrência, atomicidade e recuperação. A suíte não cobre AWS
-IAM gerenciada, perda física de disco, backup/failover, benchmark de throughput,
+IAM gerenciada, perda física de disco, backup/failover,
 consumer downstream ou agregação durável de métricas. Não há meta de RPS.
 Contagens e tempos são resultados datados no [relatório](../history/reports/task12-audit-report.md),
-sem transformar números de uma etapa anterior em cobertura atual.
+sem transformar números de uma etapa anterior em cobertura atual. O
+[benchmark local](load-test.md) tem amostras datadas e limitações próprias;
+não estabelece uma meta de RPS.

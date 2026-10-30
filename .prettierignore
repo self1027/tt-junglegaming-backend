@@ -6,3 +6,4 @@ bun.lock
 # Enunciado original imutavel; nao reformatar.
 docs/challenge.md
 graphify-out/
+load-results/

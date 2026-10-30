@@ -142,5 +142,7 @@ crashes antes/depois do envio, proxy retendo resposta real e readquisição.
 Docker cobre imagem compilada e SIGTERM real, drenagem e prazo excedido.
 Resultados executados, incluindo limitações, pertencem ao relatório da tarefa.
 
-Não há consumidor downstream, teste contra IAM/AWS gerenciada, teste de carga ou
-garantia de retenção infinita no broker. O [worker de referências](pending-worker.md) executa separado; métricas não têm backend agregado.
+Não há consumidor downstream, teste contra IAM/AWS gerenciada ou garantia de
+retenção infinita no broker. O [benchmark local](../testing/load-test.md) mede
+publicação e drenagem pela demo. O [worker de referências](pending-worker.md)
+executa separado; métricas não têm backend agregado.

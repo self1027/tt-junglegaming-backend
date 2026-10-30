@@ -106,6 +106,24 @@ Cada execução usa identidades novas e consulta respostas, ledger, Inbox/Outbox
 eventos reais. Pode repetir sem apagar o banco. O [quickstart](docs/quickstart.md)
 traz health, logs e solução de problemas.
 
+## Teste de carga
+
+Com a demo já iniciada, execute o perfil Quick:
+
+```sh
+docker compose -f compose.demo.yaml run --rm load
+```
+
+Para o Standard, use `docker compose -f compose.demo.yaml run --rm -e LOAD_PROFILE=standard load`.
+Com Bun instalado, `bun run test:load` executa o mesmo driver no Docker e acrescenta
+metadados do host. Os relatórios JSON e Markdown ficam em `load-results/`.
+
+O benchmark compara wallets independentes com uma hot wallet para observar a
+espera pelo lock financeiro. Também mede replays e o fluxo SQS/Outbox, com
+throughput, percentis reais, erros, drenagem e reconciliação. Consulte a
+[metodologia e os resultados](docs/testing/load-test.md). Execute uma carga por vez;
+o teste mantém os dados financeiros e os eventos na demo.
+
 ## O que foi implementado
 
 - Dinheiro exato em centavos (`bigint`), com strings decimais nos contratos.

@@ -20,6 +20,7 @@ Comece pelo [README](../README.md) e pelo [quickstart](quickstart.md) para execu
 | Falhas, leases expirados e shutdown                 | [Recuperação](operations/failure-recovery.md)                                                                    |
 | Logs, métricas e diagnóstico                        | [Observabilidade](operations/observability.md)                                                                   |
 | Seleção de testes e evidência distribuída           | [Estratégia](testing/strategy.md) e [cenários](testing/distributed-scenarios.md)                                 |
+| Carga reproduzível, métricas e análise              | [Benchmark da demo](testing/load-test.md)                                                                        |
 | Planos e resultados anteriores                      | [Histórico](history/README.md)                                                                                   |
 | Navegação assistida do código                       | [Graphify](tooling/graphify.md) e [Ponytail](tooling/ponytail.md)                                                |
 

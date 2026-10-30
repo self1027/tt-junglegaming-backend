@@ -82,4 +82,5 @@ SKIP LOCKED, envio sem transação e finalização obsoleta.
 São provas dos cenários executados, sem promessa de ausência universal de deadlock
 para clientes que ignorem a ordem. Constraints protegem unicidade/imutabilidade/
 não-negatividade; clientes SQL arbitrários ainda podem quebrar relações mantidas
-pelo coordenador. Não há benchmark de throughput ou meta de RPS.
+pelo coordenador. O [benchmark local](../testing/load-test.md) compara wallets
+independentes e hot wallet, sem meta de RPS.
